@@ -2,6 +2,19 @@
 
 All notable changes to **Lutetian** will be documented in this file.
 
+## [0.2.0](https://github.com/hamides-dev/lutetian/compare/v0.1.0...v0.2.0) (2026-11-20)
+
+
+### Features
+
+* add interactive CAD tools, embedded architectural samples, lightbox, skill installer, and cross-platform fixes ([ad11b5f](https://github.com/hamides-dev/lutetian/commit/ad11b5f04f122a9b3a12a2611f95f2da2488485f))
+* initial Lutetian Studio workspace, scale validator, MCP bridge, and Antigravity plugin ([63100a8](https://github.com/hamides-dev/lutetian/commit/63100a861c91c68079ff7fce5f3dd7fee93964f3))
+
+
+### Bug Fixes
+
+* **app:** gate app_icon field for cross-platform clippy cleanly ([c572376](https://github.com/hamides-dev/lutetian/commit/c572376026e6e892f499218ea09c7a807015cfe6))
+
 ## [0.1.0] - 2026-11-20
 
 ### Features

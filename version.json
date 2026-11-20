@@ -1,32 +1,32 @@
 {
-  "version": "0.1.0",
-  "tag": "v0.1.0",
+  "version": "0.2.0",
+  "tag": "v0.2.0",
   "published_at": "2026-11-20T10:00:00Z",
-  "release_url": "https://github.com/hamides-dev/lutetian/releases/tag/v0.1.0",
+  "release_url": "https://github.com/hamides-dev/lutetian/releases/tag/v0.2.0",
   "notes": "Lutetian v0.1.0: Pure-Rust Game Environment Architecture Studio, interactive 2D metric CAD viewer, deterministic scale validator, live agent mission control, and Google Antigravity MCP plugin.",
   "assets": {
     "windows_x86_64_installer": {
-      "url": "https://github.com/hamides-dev/lutetian/releases/download/v0.1.0/lutetian-setup-windows-x86_64.exe",
+      "url": "https://github.com/hamides-dev/lutetian/releases/download/v0.2.0/lutetian-setup-windows-x86_64.exe",
       "sha256": ""
     },
     "windows_x86_64_portable": {
-      "url": "https://github.com/hamides-dev/lutetian/releases/download/v0.1.0/lutetian-windows-x86_64.zip",
+      "url": "https://github.com/hamides-dev/lutetian/releases/download/v0.2.0/lutetian-windows-x86_64.zip",
       "sha256": ""
     },
     "macos_arm64_dmg": {
-      "url": "https://github.com/hamides-dev/lutetian/releases/download/v0.1.0/lutetian-macos-arm64.dmg",
+      "url": "https://github.com/hamides-dev/lutetian/releases/download/v0.2.0/lutetian-macos-arm64.dmg",
       "sha256": ""
     },
     "macos_x86_64_dmg": {
-      "url": "https://github.com/hamides-dev/lutetian/releases/download/v0.1.0/lutetian-macos-x86_64.dmg",
+      "url": "https://github.com/hamides-dev/lutetian/releases/download/v0.2.0/lutetian-macos-x86_64.dmg",
       "sha256": ""
     },
     "linux_x86_64_deb": {
-      "url": "https://github.com/hamides-dev/lutetian/releases/download/v0.1.0/lutetian-linux-amd64.deb",
+      "url": "https://github.com/hamides-dev/lutetian/releases/download/v0.2.0/lutetian-linux-amd64.deb",
       "sha256": ""
     },
     "linux_x86_64_tar": {
-      "url": "https://github.com/hamides-dev/lutetian/releases/download/v0.1.0/lutetian-linux-x86_64.tar.gz",
+      "url": "https://github.com/hamides-dev/lutetian/releases/download/v0.2.0/lutetian-linux-x86_64.tar.gz",
       "sha256": ""
     }
   }
