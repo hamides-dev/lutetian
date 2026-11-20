@@ -142,12 +142,26 @@ fn view_settings_general<'a>(
         hairline_divider(mode),
         sleek_row(
             mode,
-            "Google Antigravity MCP Plugin",
-            Some(
-                "Copy ready-to-use MCP config JSON or open the antigravity-plugin folder"
-                    .to_string()
-            ),
+            "Google Antigravity MCP & Skills",
+            Some(format!(
+                "{}/5 Lutetian SKILL.md modules installed in ~/.gemini/antigravity/skills",
+                state.installed_skills_count
+            )),
             row![
+                button(
+                    row![
+                        ui_icon(UiIcon::Download, 14.0, iced::Color::WHITE),
+                        text("Install Skills to Antigravity")
+                            .size(12)
+                            .font(ui_font_semi)
+                            .color(iced::Color::WHITE),
+                    ]
+                    .spacing(6)
+                    .align_y(Alignment::Center),
+                )
+                .on_press(DashboardMsg::InstallAntigravityPlugin)
+                .padding([7, 13])
+                .style(primary_button_style(mode)),
                 button(
                     row![
                         ui_icon(UiIcon::Copy, 14.0, p.text_primary),
@@ -162,7 +176,7 @@ fn view_settings_general<'a>(
                 button(
                     row![
                         ui_icon(UiIcon::FolderOpen, 14.0, p.text_primary),
-                        text("Open Plugin Folder").size(12).font(ui_font_semi),
+                        text("Open Folder").size(12).font(ui_font_semi),
                     ]
                     .spacing(6)
                     .align_y(Alignment::Center),

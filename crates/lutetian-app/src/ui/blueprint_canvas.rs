@@ -13,6 +13,14 @@ use std::collections::{BTreeSet, HashSet};
 const RULER_LEFT: f32 = 38.0;
 const RULER_TOP: f32 = 26.0;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CanvasToolMode {
+    #[default]
+    SelectPan,
+    MoveEntity,
+    MeasureRuler,
+}
+
 #[derive(Debug, Clone)]
 pub struct BlueprintCanvasState {
     pub zoom_px_per_m: f32,
@@ -20,6 +28,9 @@ pub struct BlueprintCanvasState {
     pub pan_y_px: f32,
     pub visible_layers: BTreeSet<BlueprintLayer>,
     pub selected_entity_id: Option<String>,
+    pub tool_mode: CanvasToolMode,
+    pub cursor_world_m: Option<(f64, f64)>,
+    pub measure_line: Option<((f64, f64), (f64, f64))>,
 }
 
 impl Default for BlueprintCanvasState {
@@ -34,6 +45,9 @@ impl Default for BlueprintCanvasState {
             pan_y_px: 24.0,
             visible_layers,
             selected_entity_id: None,
+            tool_mode: CanvasToolMode::SelectPan,
+            cursor_world_m: None,
+            measure_line: None,
         }
     }
 }
@@ -89,12 +103,21 @@ pub enum CanvasMsg {
         x_m: f64,
         y_m: f64,
     },
+    MoveEntityBy {
+        entity_id: String,
+        dx_m: f64,
+        dy_m: f64,
+    },
+    UpdateCursorWorld(Option<(f64, f64)>),
+    SetMeasureLine(Option<((f64, f64), (f64, f64))>),
 }
 
 #[derive(Debug, Default)]
 pub struct CanvasInteractionState {
     dragging_pan: bool,
     dragging_marker_id: Option<String>,
+    dragging_entity_id: Option<String>,
+    measuring_start: Option<(f64, f64)>,
     last_cursor: Option<Point>,
     press_origin: Option<Point>,
 }
@@ -118,10 +141,23 @@ impl<'a> Program<CanvasMsg> for BlueprintCadProgram<'a> {
         match event {
             Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
                 let local = cursor.position_in(bounds)?;
+                if local.x <= RULER_LEFT || local.y <= RULER_TOP {
+                    return None;
+                }
                 interaction.last_cursor = Some(local);
                 interaction.press_origin = Some(local);
 
-                // Check if user grabbed a scale marker first (when Navigation & Scale is visible)
+                let (wx, wy) = self.state.screen_to_world(local);
+                if self.state.tool_mode == CanvasToolMode::MeasureRuler {
+                    let snapped = snap_quarter(wx, wy);
+                    interaction.measuring_start = Some(snapped);
+                    return Some(
+                        Action::publish(CanvasMsg::SetMeasureLine(Some((snapped, snapped))))
+                            .and_capture(),
+                    );
+                }
+
+                // Scale marker grab is always supported when layer visible
                 if self
                     .state
                     .visible_layers
@@ -129,9 +165,7 @@ impl<'a> Program<CanvasMsg> for BlueprintCadProgram<'a> {
                 {
                     for marker in &self.project.blueprint.scale_markers {
                         let mp = self.state.world_to_screen(marker.x_m, marker.y_m);
-                        let dx = local.x - mp.x;
-                        let dy = local.y - mp.y;
-                        if (dx * dx + dy * dy).sqrt() <= 16.0 {
+                        if (local.x - mp.x).hypot(local.y - mp.y) <= 16.0 {
                             interaction.dragging_marker_id = Some(marker.id.clone());
                             return Some(
                                 Action::publish(CanvasMsg::SelectEntity(Some(marker.id.clone())))
@@ -139,6 +173,15 @@ impl<'a> Program<CanvasMsg> for BlueprintCadProgram<'a> {
                             );
                         }
                     }
+                }
+
+                if self.state.tool_mode == CanvasToolMode::MoveEntity
+                    && let Some(picked) = hit_test_movable(self.project, wx, wy)
+                {
+                    interaction.dragging_entity_id = Some(picked.clone());
+                    return Some(
+                        Action::publish(CanvasMsg::SelectEntity(Some(picked))).and_capture(),
+                    );
                 }
 
                 interaction.dragging_pan = true;
@@ -152,11 +195,24 @@ impl<'a> Program<CanvasMsg> for BlueprintCadProgram<'a> {
                 Some(Action::capture())
             }
             Event::Mouse(mouse::Event::CursorMoved { .. }) => {
-                let local = cursor.position_in(bounds)?;
+                let Some(local) = cursor.position_in(bounds) else {
+                    if self.state.cursor_world_m.is_some() {
+                        return Some(Action::publish(CanvasMsg::UpdateCursorWorld(None)));
+                    }
+                    return None;
+                };
                 let prev = interaction.last_cursor.replace(local);
+                let (wx, wy) = self.state.screen_to_world(local);
+
+                if let Some(start) = interaction.measuring_start {
+                    let end = snap_quarter(wx, wy);
+                    return Some(
+                        Action::publish(CanvasMsg::SetMeasureLine(Some((start, end))))
+                            .and_capture(),
+                    );
+                }
 
                 if let Some(marker_id) = interaction.dragging_marker_id.clone() {
-                    let (wx, wy) = self.state.screen_to_world(local);
                     let clamped_x = wx.clamp(0.0, self.project.blueprint.world_width_m);
                     let clamped_y = wy.clamp(0.0, self.project.blueprint.world_depth_m);
                     return Some(
@@ -169,6 +225,23 @@ impl<'a> Program<CanvasMsg> for BlueprintCadProgram<'a> {
                     );
                 }
 
+                if let Some(entity_id) = interaction.dragging_entity_id.clone()
+                    && let Some(p) = prev
+                {
+                    let dx_m = ((local.x - p.x) / self.state.zoom_px_per_m) as f64;
+                    let dy_m = ((local.y - p.y) / self.state.zoom_px_per_m) as f64;
+                    if dx_m.abs() > 0.001 || dy_m.abs() > 0.001 {
+                        return Some(
+                            Action::publish(CanvasMsg::MoveEntityBy {
+                                entity_id,
+                                dx_m,
+                                dy_m,
+                            })
+                            .and_capture(),
+                        );
+                    }
+                }
+
                 if interaction.dragging_pan
                     && let Some(p) = prev
                 {
@@ -177,19 +250,27 @@ impl<'a> Program<CanvasMsg> for BlueprintCadProgram<'a> {
                         return Some(Action::publish(CanvasMsg::PanBy(delta)).and_capture());
                     }
                 }
+
+                if local.x > RULER_LEFT && local.y > RULER_TOP {
+                    let snapped = snap_quarter(wx, wy);
+                    if self.state.cursor_world_m != Some(snapped) {
+                        return Some(Action::publish(CanvasMsg::UpdateCursorWorld(Some(snapped))));
+                    }
+                }
                 None
             }
             Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
-                let was_marker = interaction.dragging_marker_id.take().is_some();
+                let was_special = interaction.dragging_marker_id.take().is_some()
+                    || interaction.dragging_entity_id.take().is_some()
+                    || interaction.measuring_start.take().is_some();
                 interaction.dragging_pan = false;
                 let press_origin = interaction.press_origin.take();
                 interaction.last_cursor = None;
 
-                if was_marker {
+                if was_special {
                     return Some(Action::capture());
                 }
 
-                // Treat short click without drag as entity selection
                 if let (Some(orig), Some(local)) = (press_origin, cursor.position_in(bounds)) {
                     let dist = ((local.x - orig.x).powi(2) + (local.y - orig.y).powi(2)).sqrt();
                     if dist < 5.0 && local.x > RULER_LEFT && local.y > RULER_TOP {
@@ -205,6 +286,8 @@ impl<'a> Program<CanvasMsg> for BlueprintCadProgram<'a> {
             Event::Mouse(mouse::Event::ButtonReleased(_)) => {
                 interaction.dragging_pan = false;
                 interaction.dragging_marker_id = None;
+                interaction.dragging_entity_id = None;
+                interaction.measuring_start = None;
                 interaction.last_cursor = None;
                 None
             }
@@ -313,11 +396,11 @@ impl<'a> Program<CanvasMsg> for BlueprintCadProgram<'a> {
         );
 
         // 4. Elevation & Height Layer
-        if self
+        let show_elev = self
             .state
             .visible_layers
-            .contains(&BlueprintLayer::ElevationHeight)
-        {
+            .contains(&BlueprintLayer::ElevationHeight);
+        if show_elev {
             for elev in &bp.elevations {
                 let tl = self.state.world_to_screen(elev.rect.x_m, elev.rect.y_m);
                 let sz = Size::new(
@@ -481,16 +564,26 @@ impl<'a> Program<CanvasMsg> for BlueprintCadProgram<'a> {
                     );
                 }
 
-                // Exact metric dimensions label inside/above footprint
                 let c = fp.rect.center();
                 let cp = self.state.world_to_screen(c.x_m, c.y_m);
                 let pixel_w = (fp.rect.width_m as f32) * z;
                 if pixel_w >= 26.0 {
-                    frame.fill_text(CanvasText {
-                        content: format!(
+                    let label_txt = if show_elev {
+                        format!(
+                            "{:.1}×{:.1}m\n+{:.1}→{:.1}m Z",
+                            fp.rect.width_m,
+                            fp.rect.depth_m,
+                            fp.base_elevation_m,
+                            fp.base_elevation_m + fp.height_m
+                        )
+                    } else {
+                        format!(
                             "{:.1}×{:.1}m\nH {:.1}m",
                             fp.rect.width_m, fp.rect.depth_m, fp.height_m
-                        ),
+                        )
+                    };
+                    frame.fill_text(CanvasText {
+                        content: label_txt,
                         position: cp,
                         color: if is_violated {
                             p.danger
@@ -665,7 +758,43 @@ impl<'a> Program<CanvasMsg> for BlueprintCadProgram<'a> {
             }
         }
 
-        // 9. Top & Left Metric Rulers + Scale Bar
+        // 9. Active Distance Measure Ruler Line
+        if let Some(((ax, ay), (bx, by))) = self.state.measure_line {
+            let sa = self.state.world_to_screen(ax, ay);
+            let sb = self.state.world_to_screen(bx, by);
+            frame.stroke(
+                &Path::line(sa, sb),
+                Stroke {
+                    width: 2.2,
+                    style: canvas::Style::Solid(p.accent_text),
+                    line_dash: canvas::LineDash {
+                        segments: &[6.0, 3.0],
+                        offset: 0,
+                    },
+                    ..Stroke::default()
+                },
+            );
+            frame.fill(&Path::circle(sa, 4.0), p.accent_text);
+            frame.fill(&Path::circle(sb, 4.0), p.accent_text);
+            let dist = (bx - ax).hypot(by - ay);
+            let mid = Point::new((sa.x + sb.x) * 0.5, (sa.y + sb.y) * 0.5 - 12.0);
+            frame.fill_text(CanvasText {
+                content: format!(
+                    "{dist:.2}m (ΔX {:.2} · ΔY {:.2})",
+                    (bx - ax).abs(),
+                    (by - ay).abs()
+                ),
+                position: mid,
+                color: p.text_primary,
+                size: 11.0.into(),
+                font: mono_font,
+                align_x: Horizontal::Center.into(),
+                align_y: Vertical::Bottom,
+                ..CanvasText::default()
+            });
+        }
+
+        // 10. Top & Left Metric Rulers + Scale Bar + Live Cursor Readout
         draw_rulers_and_scale_bar(&mut frame, bounds.size(), self.state, p, mono_font);
 
         vec![frame.into_geometry()]
@@ -677,14 +806,21 @@ impl<'a> Program<CanvasMsg> for BlueprintCadProgram<'a> {
         bounds: Rectangle,
         cursor: mouse::Cursor,
     ) -> mouse::Interaction {
-        if interaction.dragging_marker_id.is_some() || interaction.dragging_pan {
+        if interaction.dragging_marker_id.is_some()
+            || interaction.dragging_entity_id.is_some()
+            || interaction.dragging_pan
+        {
             return mouse::Interaction::Grabbing;
         }
         if let Some(local) = cursor.position_in(bounds)
             && local.x > RULER_LEFT
             && local.y > RULER_TOP
         {
-            return mouse::Interaction::Crosshair;
+            return match self.state.tool_mode {
+                CanvasToolMode::SelectPan => mouse::Interaction::Pointer,
+                CanvasToolMode::MoveEntity => mouse::Interaction::Grab,
+                CanvasToolMode::MeasureRuler => mouse::Interaction::Crosshair,
+            };
         }
         mouse::Interaction::default()
     }
@@ -707,6 +843,26 @@ pub fn view_blueprint_canvas<'a, M: 'a>(
     el.map(map_msg)
 }
 
+fn snap_quarter(x: f64, y: f64) -> (f64, f64) {
+    ((x * 4.0).round() / 4.0, (y * 4.0).round() / 4.0)
+}
+
+fn hit_test_movable(project: &LutetianProject, wx: f64, wy: f64) -> Option<String> {
+    let bp = &project.blueprint;
+    for door in &bp.doors {
+        if (wx - door.position_m.x_m).hypot(wy - door.position_m.y_m) <= door.width_m.max(1.0) {
+            return Some(door.id.clone());
+        }
+    }
+    for fp in bp.footprints.iter().rev() {
+        let (x0, y0, x1, y1) = fp.rect.world_aabb();
+        if wx >= x0 && wx <= x1 && wy >= y0 && wy <= y1 {
+            return Some(fp.id.clone());
+        }
+    }
+    None
+}
+
 fn hit_test_entity(project: &LutetianProject, wx: f64, wy: f64) -> Option<String> {
     let bp = &project.blueprint;
     for marker in &bp.scale_markers {
@@ -715,7 +871,7 @@ fn hit_test_entity(project: &LutetianProject, wx: f64, wy: f64) -> Option<String
         }
     }
     for door in &bp.doors {
-        if (wx - door.position_m.x_m).hypot(wy - door.position_m.y_m) <= (door.width_m.max(1.0)) {
+        if (wx - door.position_m.x_m).hypot(wy - door.position_m.y_m) <= door.width_m.max(1.0) {
             return Some(door.id.clone());
         }
     }
@@ -867,7 +1023,6 @@ fn draw_metric_grid(
         );
     }
 
-    // World bounds outline
     let w_tl = state.world_to_screen(0.0, 0.0);
     let w_sz = Size::new((world_w_m as f32) * z, (world_d_m as f32) * z);
     frame.stroke(
@@ -887,7 +1042,6 @@ fn draw_rulers_and_scale_bar(
     p: ThemePalette,
     mono_font: Font,
 ) {
-    // Ruler bars
     frame.fill_rectangle(
         Point::ORIGIN,
         Size::new(size.width, RULER_TOP),
@@ -999,10 +1153,30 @@ fn draw_rulers_and_scale_bar(
         y += tick_step_m;
     }
 
+    // Bottom-left live cursor coordinates pill
+    if let Some((cx, cy)) = state.cursor_world_m {
+        let coord_txt = format!("X {cx:.2}m · Y {cy:.2}m");
+        frame.fill_rectangle(
+            Point::new(RULER_LEFT + 10.0, size.height - 32.0),
+            Size::new(152.0, 22.0),
+            Color::from_rgba(p.bg_sidebar.r, p.bg_sidebar.g, p.bg_sidebar.b, 0.88),
+        );
+        frame.fill_text(CanvasText {
+            content: coord_txt,
+            position: Point::new(RULER_LEFT + 18.0, size.height - 21.0),
+            color: p.accent_text,
+            size: 10.0.into(),
+            font: mono_font,
+            align_x: Horizontal::Left.into(),
+            align_y: Vertical::Center,
+            ..CanvasText::default()
+        });
+    }
+
     // Bottom-right scale bar
     let bar_meters = if z >= 14.0 { 5.0 } else { 10.0 };
     let bar_px = bar_meters * z;
-    let bx = (size.width - bar_px - 22.0).max(RULER_LEFT + 14.0);
+    let bx = (size.width - bar_px - 22.0).max(RULER_LEFT + 174.0);
     let by = size.height - 20.0;
     frame.fill_rectangle(
         Point::new(bx - 10.0, by - 22.0),

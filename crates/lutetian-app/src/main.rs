@@ -17,16 +17,20 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 use tokio::sync::RwLock;
 use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
-use ui::blueprint_canvas::CanvasMsg;
+use ui::blueprint_canvas::{CanvasMsg, CanvasToolMode};
 use ui::dashboard::{DashboardMsg, DashboardState, DashboardTab, view_dashboard};
 use ui::icons::load_app_icon_rgba;
 use ui::theme::transparent_iced_theme_for;
 
 #[derive(Debug, Clone)]
 enum AppBridgeMsg {
-    Started { port: u16, state: BridgeState },
+    Started {
+        port: u16,
+        state: BridgeState,
+    },
     Event(BridgeEvent),
     Failed(String),
+    #[cfg(target_os = "windows")]
     WakeWindow,
 }
 
@@ -107,6 +111,7 @@ enum Message {
     Bridge(AppBridgeMsg),
     WindowOpened(window::Id),
     WindowEventOccurred(window::Id, window::Event),
+    KeyboardEvent(iced::keyboard::Event),
     Dashboard(DashboardMsg),
     UpdateCheckFinished(Result<UpdateCheckResult, String>),
     AutoUpdateCheckFinished(Option<Result<UpdateCheckResult, String>>),
@@ -209,7 +214,13 @@ impl LutetianApp {
         let app_icon =
             load_app_icon_rgba().and_then(|(rgba, w, h)| window::icon::from_rgba(rgba, w, h).ok());
         let (dash_id, open_task) = open_dashboard_task(app_icon.clone());
-        let dashboard = DashboardState::new(&config, &project, config.bridge_port);
+        let installed_skills_count = count_installed_lutetian_skills();
+        let dashboard = DashboardState::new(
+            &config,
+            &project,
+            config.bridge_port,
+            installed_skills_count,
+        );
 
         let app = Self {
             storage,
@@ -246,6 +257,7 @@ impl LutetianApp {
         let mut subs = vec![
             Subscription::run(bridge_stream).map(Message::Bridge),
             window::events().map(|(id, ev)| Message::WindowEventOccurred(id, ev)),
+            iced::keyboard::listen().map(Message::KeyboardEvent),
         ];
         if self.config.auto_check_updates {
             subs.push(
@@ -272,6 +284,33 @@ impl LutetianApp {
                 }
                 _ => Task::none(),
             },
+            Message::KeyboardEvent(ev) => {
+                if let iced::keyboard::Event::KeyPressed { key, modifiers, .. } = ev {
+                    match key {
+                        iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape) => {
+                            if self.dashboard.lightbox_image.is_some() {
+                                self.dashboard.lightbox_image = None;
+                            } else if self.dashboard.canvas_state.measure_line.is_some() {
+                                self.dashboard.canvas_state.measure_line = None;
+                            } else if self.dashboard.error_banner.is_some()
+                                || self.dashboard.status_toast.is_some()
+                            {
+                                self.dashboard.error_banner = None;
+                                self.dashboard.status_toast = None;
+                            }
+                        }
+                        iced::keyboard::Key::Character(c)
+                            if modifiers.command() && c.eq_ignore_ascii_case("s") =>
+                        {
+                            self.sync_project_and_save();
+                            self.dashboard.status_toast =
+                                Some(format!("Saved {}", self.project_path.display()));
+                        }
+                        _ => {}
+                    }
+                }
+                Task::none()
+            }
             Message::Bridge(msg) => match msg {
                 AppBridgeMsg::Started { port, state } => {
                     self.dashboard.bridge_port = port;
@@ -287,7 +326,17 @@ impl LutetianApp {
                             .save_project(&self.project_path, &self.project_snapshot);
                     }
                     match ev {
-                        BridgeEvent::ProjectMutated { reason, .. } => {
+                        BridgeEvent::ProjectMutated { reason, stage } => {
+                            if stage == PipelineStage::Stage3Blueprint {
+                                let view_w = (self.window_size.width - 540.0).max(400.0);
+                                let view_h = (self.window_size.height - 220.0).max(320.0);
+                                self.dashboard.canvas_state.fit_world(
+                                    self.project_snapshot.blueprint.world_width_m,
+                                    self.project_snapshot.blueprint.world_depth_m,
+                                    view_w,
+                                    view_h,
+                                );
+                            }
                             self.dashboard.status_toast = Some(reason);
                         }
                         BridgeEvent::TelemetryUpdated { action } => {
@@ -305,6 +354,7 @@ impl LutetianApp {
                     self.dashboard.error_banner = Some(format!("Bridge error: {err}"));
                     Task::none()
                 }
+                #[cfg(target_os = "windows")]
                 AppBridgeMsg::WakeWindow => {
                     if let Some(id) = self.dashboard_id {
                         Task::batch([window::minimize(id, false), window::gain_focus(id)])
@@ -454,6 +504,14 @@ impl LutetianApp {
             }
             DashboardMsg::SwitchSettingsSubTab(sub) => {
                 self.dashboard.settings_subtab = sub;
+                Task::none()
+            }
+            DashboardMsg::OpenLightbox { title, path } => {
+                self.dashboard.lightbox_image = Some((title, path));
+                Task::none()
+            }
+            DashboardMsg::CloseLightbox => {
+                self.dashboard.lightbox_image = None;
                 Task::none()
             }
             DashboardMsg::DismissToast => {
@@ -611,6 +669,26 @@ impl LutetianApp {
                 }
                 Task::none()
             }
+            DashboardMsg::AnchorVehicleLenChanged(v) => {
+                self.dashboard.anchor_veh_len_buf = v.clone();
+                if let Ok(val) = v.trim().parse::<f64>()
+                    && val > 0.0
+                {
+                    self.project_snapshot.bible.scale_anchors.vehicle_length_m = val;
+                    self.sync_project_and_save();
+                }
+                Task::none()
+            }
+            DashboardMsg::AnchorVehicleWidthChanged(v) => {
+                self.dashboard.anchor_veh_wid_buf = v.clone();
+                if let Ok(val) = v.trim().parse::<f64>()
+                    && val > 0.0
+                {
+                    self.project_snapshot.bible.scale_anchors.vehicle_width_m = val;
+                    self.sync_project_and_save();
+                }
+                Task::none()
+            }
             DashboardMsg::AddReferenceImage => {
                 if let Some(path) = rfd::FileDialog::new()
                     .add_filter("Images", &["png", "jpg", "jpeg", "webp"])
@@ -763,7 +841,57 @@ impl LutetianApp {
                             self.sync_project_and_save();
                         }
                     }
+                    CanvasMsg::MoveEntityBy {
+                        entity_id,
+                        dx_m,
+                        dy_m,
+                    } => {
+                        let mut moved = false;
+                        if let Some(fp) = self
+                            .project_snapshot
+                            .blueprint
+                            .footprints
+                            .iter_mut()
+                            .find(|f| f.id == entity_id)
+                        {
+                            fp.rect.x_m += dx_m;
+                            fp.rect.y_m += dy_m;
+                            moved = true;
+                        } else if let Some(door) = self
+                            .project_snapshot
+                            .blueprint
+                            .doors
+                            .iter_mut()
+                            .find(|d| d.id == entity_id)
+                        {
+                            door.position_m.x_m += dx_m;
+                            door.position_m.y_m += dy_m;
+                            moved = true;
+                        }
+                        if moved {
+                            self.dashboard
+                                .sync_selected_entity_buffers(&self.project_snapshot);
+                            self.sync_project_and_save();
+                        }
+                    }
+                    CanvasMsg::UpdateCursorWorld(pt) => {
+                        self.dashboard.canvas_state.cursor_world_m = pt;
+                    }
+                    CanvasMsg::SetMeasureLine(line) => {
+                        self.dashboard.canvas_state.measure_line = line;
+                    }
                 }
+                Task::none()
+            }
+            DashboardMsg::SetCanvasTool(mode) => {
+                self.dashboard.canvas_state.tool_mode = mode;
+                if mode != CanvasToolMode::MeasureRuler {
+                    self.dashboard.canvas_state.measure_line = None;
+                }
+                Task::none()
+            }
+            DashboardMsg::ClearMeasureRuler => {
+                self.dashboard.canvas_state.measure_line = None;
                 Task::none()
             }
             DashboardMsg::ToggleBlueprintLayer(layer) => {
@@ -794,6 +922,62 @@ impl LutetianApp {
                     view_w,
                     view_h,
                 );
+                Task::none()
+            }
+            DashboardMsg::SelectedPosXChanged(v) => {
+                self.dashboard.selected_x_buf = v.clone();
+                if let (Some(id), Ok(val)) = (
+                    self.dashboard.canvas_state.selected_entity_id.clone(),
+                    v.trim().parse::<f64>(),
+                ) && val.is_finite()
+                {
+                    if let Some(fp) = self
+                        .project_snapshot
+                        .blueprint
+                        .footprints
+                        .iter_mut()
+                        .find(|f| f.id == id)
+                    {
+                        fp.rect.x_m = val;
+                    } else if let Some(door) = self
+                        .project_snapshot
+                        .blueprint
+                        .doors
+                        .iter_mut()
+                        .find(|d| d.id == id)
+                    {
+                        door.position_m.x_m = val;
+                    }
+                    self.sync_project_and_save();
+                }
+                Task::none()
+            }
+            DashboardMsg::SelectedPosYChanged(v) => {
+                self.dashboard.selected_y_buf = v.clone();
+                if let (Some(id), Ok(val)) = (
+                    self.dashboard.canvas_state.selected_entity_id.clone(),
+                    v.trim().parse::<f64>(),
+                ) && val.is_finite()
+                {
+                    if let Some(fp) = self
+                        .project_snapshot
+                        .blueprint
+                        .footprints
+                        .iter_mut()
+                        .find(|f| f.id == id)
+                    {
+                        fp.rect.y_m = val;
+                    } else if let Some(door) = self
+                        .project_snapshot
+                        .blueprint
+                        .doors
+                        .iter_mut()
+                        .find(|d| d.id == id)
+                    {
+                        door.position_m.y_m = val;
+                    }
+                    self.sync_project_and_save();
+                }
                 Task::none()
             }
             DashboardMsg::SelectedWidthChanged(v) => {
@@ -872,6 +1056,103 @@ impl LutetianApp {
                 }
                 Task::none()
             }
+            DashboardMsg::SelectedRotChanged(v) => {
+                self.dashboard.selected_rot_buf = v.clone();
+                if let (Some(id), Ok(val)) = (
+                    self.dashboard.canvas_state.selected_entity_id.clone(),
+                    v.trim().parse::<f64>(),
+                ) && val.is_finite()
+                    && let Some(fp) = self
+                        .project_snapshot
+                        .blueprint
+                        .footprints
+                        .iter_mut()
+                        .find(|f| f.id == id)
+                {
+                    fp.rect.rotation_deg = val.rem_euclid(360.0);
+                    self.sync_project_and_save();
+                }
+                Task::none()
+            }
+            DashboardMsg::SelectedElevChanged(v) => {
+                self.dashboard.selected_elev_buf = v.clone();
+                if let (Some(id), Ok(val)) = (
+                    self.dashboard.canvas_state.selected_entity_id.clone(),
+                    v.trim().parse::<f64>(),
+                ) && val.is_finite()
+                {
+                    if let Some(fp) = self
+                        .project_snapshot
+                        .blueprint
+                        .footprints
+                        .iter_mut()
+                        .find(|f| f.id == id)
+                    {
+                        fp.base_elevation_m = val;
+                    } else if let Some(door) = self
+                        .project_snapshot
+                        .blueprint
+                        .doors
+                        .iter_mut()
+                        .find(|d| d.id == id)
+                    {
+                        door.sill_elevation_m = val;
+                    }
+                    self.sync_project_and_save();
+                }
+                Task::none()
+            }
+            DashboardMsg::SelectedFloorsChanged(v) => {
+                self.dashboard.selected_floors_buf = v.clone();
+                if let (Some(id), Ok(val)) = (
+                    self.dashboard.canvas_state.selected_entity_id.clone(),
+                    v.trim().parse::<u32>(),
+                ) && val >= 1
+                    && let Some(fp) = self
+                        .project_snapshot
+                        .blueprint
+                        .footprints
+                        .iter_mut()
+                        .find(|f| f.id == id)
+                {
+                    fp.floor_count = val;
+                    self.sync_project_and_save();
+                }
+                Task::none()
+            }
+            DashboardMsg::AddBlueprintFootprint => {
+                let id = self.project_snapshot.add_footprint_interactive();
+                self.dashboard.canvas_state.selected_entity_id = Some(id.clone());
+                self.dashboard
+                    .sync_selected_entity_buffers(&self.project_snapshot);
+                self.dashboard.status_toast = Some(format!("Added footprint {id}"));
+                self.sync_project_and_save();
+                Task::none()
+            }
+            DashboardMsg::AddBlueprintDoor => {
+                let parent = self.dashboard.canvas_state.selected_entity_id.clone();
+                let id = self
+                    .project_snapshot
+                    .add_door_interactive(parent.as_deref());
+                self.dashboard.canvas_state.selected_entity_id = Some(id.clone());
+                self.dashboard
+                    .sync_selected_entity_buffers(&self.project_snapshot);
+                self.dashboard.status_toast = Some(format!("Added door opening {id}"));
+                self.sync_project_and_save();
+                Task::none()
+            }
+            DashboardMsg::DeleteSelectedEntity => {
+                if let Some(id) = self.dashboard.canvas_state.selected_entity_id.clone()
+                    && self.project_snapshot.delete_entity(&id)
+                {
+                    self.dashboard.canvas_state.selected_entity_id = None;
+                    self.dashboard
+                        .sync_selected_entity_buffers(&self.project_snapshot);
+                    self.dashboard.status_toast = Some(format!("Deleted {id}"));
+                    self.sync_project_and_save();
+                }
+                Task::none()
+            }
             DashboardMsg::ApproveAndLockStage3 => {
                 match self.project_snapshot.approve_and_lock_stage3() {
                     Ok(()) => {
@@ -898,6 +1179,28 @@ impl LutetianApp {
                 {
                     asset.isolated_image_path = Some(path.to_string_lossy().to_string());
                     self.sync_project_and_save();
+                }
+                Task::none()
+            }
+            DashboardMsg::JumpToAsset(asset_id) => {
+                self.dashboard.selected_asset_id = Some(asset_id.clone());
+                self.dashboard.active_tab = DashboardTab::Stage4Assets;
+                self.dashboard.status_toast = Some(format!("Inspecting asset {asset_id}"));
+                Task::none()
+            }
+            DashboardMsg::SyncAssetBbox(asset_id) => {
+                if self
+                    .project_snapshot
+                    .sync_asset_bbox_from_footprint(&asset_id)
+                {
+                    self.dashboard.error_banner = None;
+                    self.dashboard.status_toast =
+                        Some(format!("Synced {asset_id} bounding box from blueprint"));
+                    self.sync_project_and_save();
+                } else {
+                    self.dashboard.error_banner = Some(format!(
+                        "No blueprint footprint found referencing {asset_id}"
+                    ));
                 }
                 Task::none()
             }
@@ -1024,10 +1327,15 @@ impl LutetianApp {
                 Task::none()
             }
             DashboardMsg::CopyMcpConfigJson => {
+                let bin_name = if cfg!(target_os = "windows") {
+                    "lutetian-mcp.exe"
+                } else {
+                    "lutetian-mcp"
+                };
                 let exe_path = std::env::current_exe()
                     .ok()
-                    .and_then(|p| p.parent().map(|d| d.join("lutetian-mcp.exe")))
-                    .unwrap_or_else(|| PathBuf::from("lutetian-mcp.exe"));
+                    .and_then(|p| p.parent().map(|d| d.join(bin_name)))
+                    .unwrap_or_else(|| PathBuf::from(bin_name));
                 let snippet = serde_json::json!({
                     "mcpServers": {
                         "lutetian": {
@@ -1041,10 +1349,34 @@ impl LutetianApp {
                     Some("Copied Antigravity MCP config to clipboard.".to_string());
                 iced::clipboard::write(text)
             }
+            DashboardMsg::InstallAntigravityPlugin => {
+                match install_embedded_antigravity_skills() {
+                    Ok((count, dir)) => {
+                        self.dashboard.installed_skills_count = count_installed_lutetian_skills();
+                        self.dashboard.error_banner = None;
+                        self.dashboard.status_toast = Some(format!(
+                            "Installed {count}/5 Lutetian SKILL.md modules to {}",
+                            dir.display()
+                        ));
+                    }
+                    Err(e) => {
+                        self.dashboard.error_banner = Some(format!("Skill install failed: {e}"));
+                    }
+                }
+                Task::none()
+            }
             DashboardMsg::OpenPluginFolder => {
-                let candidate = PathBuf::from("antigravity-plugin");
-                let target = if candidate.exists() {
-                    candidate
+                let exe_adjacent = std::env::current_exe()
+                    .ok()
+                    .and_then(|p| p.parent().map(|d| d.join("antigravity-plugin")))
+                    .filter(|p| p.exists());
+                let cwd_candidate = PathBuf::from("antigravity-plugin");
+                let target = if let Some(dir) = exe_adjacent {
+                    dir
+                } else if cwd_candidate.exists() {
+                    cwd_candidate
+                } else if let Some(skills_dir) = antigravity_skills_dir().filter(|p| p.exists()) {
+                    skills_dir
                 } else {
                     self.storage.data_dir().to_path_buf()
                 };
@@ -1192,4 +1524,66 @@ fn bridge_stream() -> impl iced::futures::Stream<Item = AppBridgeMsg> {
             std::future::pending::<()>().await;
         }
     })
+}
+
+const EMBEDDED_SKILLS: &[(&str, &str)] = &[
+    (
+        "lutetian-live-protocol",
+        include_str!("../../../antigravity-plugin/skills/lutetian-live-protocol/SKILL.md"),
+    ),
+    (
+        "lutetian-stage1-analysis",
+        include_str!("../../../antigravity-plugin/skills/lutetian-stage1-analysis/SKILL.md"),
+    ),
+    (
+        "lutetian-stage2-multiview",
+        include_str!("../../../antigravity-plugin/skills/lutetian-stage2-multiview/SKILL.md"),
+    ),
+    (
+        "lutetian-stage3-blueprint",
+        include_str!("../../../antigravity-plugin/skills/lutetian-stage3-blueprint/SKILL.md"),
+    ),
+    (
+        "lutetian-stage4-assets",
+        include_str!("../../../antigravity-plugin/skills/lutetian-stage4-assets/SKILL.md"),
+    ),
+];
+
+fn antigravity_skills_dir() -> Option<PathBuf> {
+    #[cfg(target_os = "windows")]
+    let home = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME"));
+    #[cfg(not(target_os = "windows"))]
+    let home = std::env::var_os("HOME");
+    home.map(|h| {
+        PathBuf::from(h)
+            .join(".gemini")
+            .join("antigravity")
+            .join("skills")
+    })
+}
+
+fn count_installed_lutetian_skills() -> usize {
+    let Some(dir) = antigravity_skills_dir() else {
+        return 0;
+    };
+    EMBEDDED_SKILLS
+        .iter()
+        .filter(|(name, _)| dir.join(name).join("SKILL.md").is_file())
+        .count()
+}
+
+fn install_embedded_antigravity_skills() -> Result<(usize, PathBuf), String> {
+    let dir = antigravity_skills_dir().ok_or_else(|| {
+        "Could not resolve home directory for ~/.gemini/antigravity/skills".to_string()
+    })?;
+    std::fs::create_dir_all(&dir).map_err(|e| format!("Failed creating {}: {e}", dir.display()))?;
+    for (name, content) in EMBEDDED_SKILLS {
+        let skill_dir = dir.join(name);
+        std::fs::create_dir_all(&skill_dir)
+            .map_err(|e| format!("Failed creating {}: {e}", skill_dir.display()))?;
+        let dest = skill_dir.join("SKILL.md");
+        std::fs::write(&dest, content)
+            .map_err(|e| format!("Failed writing {}: {e}", dest.display()))?;
+    }
+    Ok((EMBEDDED_SKILLS.len(), dir))
 }

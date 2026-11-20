@@ -1,5 +1,5 @@
-use crate::ui::blueprint_canvas::view_blueprint_canvas;
-use crate::ui::dashboard::{DashboardMsg, DashboardState, page_header};
+use crate::ui::blueprint_canvas::{CanvasToolMode, view_blueprint_canvas};
+use crate::ui::dashboard::{DashboardMsg, DashboardState, DashboardTab, page_header};
 use crate::ui::icons::{UiIcon, cached_image_handle, ui_icon};
 use crate::ui::theme::{
     ThemePalette, aligned_text, badge_style, card_style, danger_button_style, elevated_box_style,
@@ -218,6 +218,28 @@ pub fn view_stage1_tab<'a>(
             ui_font,
             ui_font_semi,
         ),
+        hairline_divider(mode),
+        metric_row(
+            mode,
+            "Vehicle Reference Length (m)",
+            "Default 4.50m — used for draggable vehicle silhouette on CAD map",
+            &state.anchor_veh_len_buf,
+            !locked,
+            DashboardMsg::AnchorVehicleLenChanged,
+            ui_font,
+            ui_font_semi,
+        ),
+        hairline_divider(mode),
+        metric_row(
+            mode,
+            "Vehicle Reference Width (m)",
+            "Default 1.90m — used for draggable vehicle silhouette on CAD map",
+            &state.anchor_veh_wid_buf,
+            !locked,
+            DashboardMsg::AnchorVehicleWidthChanged,
+            ui_font,
+            ui_font_semi,
+        ),
     ])
     .width(Length::Fill)
     .style(card_style(mode, 10.0));
@@ -234,15 +256,23 @@ pub fn view_stage1_tab<'a>(
     } else {
         for (idx, path) in bible.reference_images.iter().enumerate() {
             let thumb: Element<'a, DashboardMsg> = if let Some(handle) = cached_image_handle(path) {
-                image(handle)
-                    .width(Length::Fixed(56.0))
-                    .height(Length::Fixed(42.0))
-                    .content_fit(ContentFit::Cover)
-                    .into()
+                button(
+                    image(handle)
+                        .width(Length::Fixed(72.0))
+                        .height(Length::Fixed(46.0))
+                        .content_fit(ContentFit::Cover),
+                )
+                .on_press(DashboardMsg::OpenLightbox {
+                    title: format!("Reference Image #{}", idx + 1),
+                    path: path.clone(),
+                })
+                .padding(0)
+                .style(ghost_button_style(mode, false))
+                .into()
             } else {
                 container(ui_icon(UiIcon::PhotoLibrary, 18.0, p.text_muted))
-                    .width(Length::Fixed(56.0))
-                    .height(Length::Fixed(42.0))
+                    .width(Length::Fixed(72.0))
+                    .height(Length::Fixed(46.0))
                     .center_x(Length::Fill)
                     .center_y(Length::Fill)
                     .style(elevated_box_style(mode, 6.0))
@@ -297,7 +327,7 @@ pub fn view_stage1_tab<'a>(
         column![
             row![
                 ui_icon(UiIcon::PhotoLibrary, 16.0, p.accent_text),
-                text("Reference Images")
+                text("Reference Images (click preview to enlarge)")
                     .size(13.5)
                     .font(ui_font_bold)
                     .color(p.text_primary),
@@ -348,7 +378,7 @@ pub fn view_multiview_tab<'a>(
         .filter(|s| s.status == AngleApprovalStatus::Approved)
         .count();
 
-    let right_badge: Element<'a, DashboardMsg> = row![
+    let mut action_row = vec![
         container(
             text(format!("{approved_cnt}/5 Approved"))
                 .size(12)
@@ -372,32 +402,50 @@ pub fn view_multiview_tab<'a>(
                 p.accent_text
             },
             p.border_subtle,
-        )),
-        if stage2_locked {
-            Element::from(
-                button(
-                    row![
-                        ui_icon(UiIcon::LockOpen, 14.0, p.text_primary),
-                        text("Unlock Stage 2").size(12).font(ui_font_semi),
-                    ]
-                    .spacing(6)
-                    .align_y(Alignment::Center),
-                )
-                .on_press(DashboardMsg::UnlockStage(PipelineStage::Stage2MultiView))
-                .padding([7, 13])
-                .style(pill_button_style(mode)),
+        ))
+        .into(),
+    ];
+
+    if stage2_locked {
+        action_row.push(
+            button(
+                row![
+                    ui_icon(UiIcon::Layers, 14.0, iced::Color::WHITE),
+                    text("Open Blueprint CAD")
+                        .size(12)
+                        .font(ui_font_semi)
+                        .color(iced::Color::WHITE),
+                ]
+                .spacing(6)
+                .align_y(Alignment::Center),
             )
-        } else {
-            Space::new().width(0).into()
-        }
-    ]
-    .spacing(8)
-    .align_y(Alignment::Center)
-    .into();
+            .on_press(DashboardMsg::SwitchTab(DashboardTab::Stage3Blueprint))
+            .padding([7, 13])
+            .style(primary_button_style(mode))
+            .into(),
+        );
+        action_row.push(
+            button(
+                row![
+                    ui_icon(UiIcon::LockOpen, 14.0, p.text_primary),
+                    text("Unlock Stage 2").size(12).font(ui_font_semi),
+                ]
+                .spacing(6)
+                .align_y(Alignment::Center),
+            )
+            .on_press(DashboardMsg::UnlockStage(PipelineStage::Stage2MultiView))
+            .padding([7, 13])
+            .style(pill_button_style(mode))
+            .into(),
+        );
+    }
+
+    let right_badge: Element<'a, DashboardMsg> =
+        row(action_row).spacing(8).align_y(Alignment::Center).into();
 
     let header = page_header(
         "Stage 2 · Multi-View Completion & Per-Angle Approval",
-        Some("Inspect and approve Front, Back, Left, Right, and Bird's-Eye views before drafting the Master Blueprint.".to_string()),
+        Some("Inspect and approve Front, Back, Left, Right, and Bird's-Eye views (click any thumbnail to inspect full-size).".to_string()),
         Some(right_badge),
         p,
         ui_font,
@@ -445,11 +493,19 @@ pub fn view_multiview_tab<'a>(
         let preview: Element<'a, DashboardMsg> = if let Some(path) = &slot.image_path
             && let Some(handle) = cached_image_handle(path)
         {
-            image(handle)
-                .width(Length::Fixed(180.0))
-                .height(Length::Fixed(120.0))
-                .content_fit(ContentFit::Contain)
-                .into()
+            button(
+                image(handle)
+                    .width(Length::Fixed(186.0))
+                    .height(Length::Fixed(118.0))
+                    .content_fit(ContentFit::Contain),
+            )
+            .on_press(DashboardMsg::OpenLightbox {
+                title: angle.label().to_string(),
+                path: path.clone(),
+            })
+            .padding(2)
+            .style(ghost_button_style(mode, false))
+            .into()
         } else {
             container(
                 column![
@@ -462,8 +518,8 @@ pub fn view_multiview_tab<'a>(
                 .spacing(6)
                 .align_x(Alignment::Center),
             )
-            .width(Length::Fixed(180.0))
-            .height(Length::Fixed(120.0))
+            .width(Length::Fixed(186.0))
+            .height(Length::Fixed(118.0))
             .center_x(Length::Fill)
             .center_y(Length::Fill)
             .style(elevated_box_style(mode, 8.0))
@@ -665,7 +721,7 @@ pub fn view_blueprint_tab<'a>(
     let header = page_header(
         "Stage 3 · Master Blueprint CAD (Metric Grid)",
         Some(format!(
-            "{:.1}m × {:.1}m · Pan (drag), Zoom (wheel), Click entities to inspect/edit dimensions, Drag 1.8m Human / 4.5m Vehicle markers",
+            "{:.1}m × {:.1}m · Pan/Select, Move entities, Measure distance (m), Drag 1.8m Human / 4.5m Vehicle markers",
             project.blueprint.world_width_m, project.blueprint.world_depth_m
         )),
         Some(top_actions),
@@ -674,46 +730,127 @@ pub fn view_blueprint_tab<'a>(
         ui_font_bold,
     );
 
-    // Layer Toggle Strip + Zoom controls
-    let mut layer_row = row![].spacing(6).align_y(Alignment::Center);
+    // Layer Toggle Strip + CAD Tool Modes + Zoom controls
+    let mut layer_row = row![].spacing(4).align_y(Alignment::Center);
     for &layer in BlueprintLayer::all() {
         let active = state.canvas_state.visible_layers.contains(&layer);
         layer_row = layer_row.push(
             button(
                 text(layer.label())
-                    .size(11.5)
+                    .size(11.0)
                     .font(ui_font_semi)
                     .color(if active { p.accent_text } else { p.text_muted })
                     .wrapping(Wrapping::None),
             )
             .on_press(DashboardMsg::ToggleBlueprintLayer(layer))
-            .padding([5, 10])
+            .padding([5, 8])
             .style(ghost_button_style(mode, active)),
+        );
+    }
+
+    let tool_btn = |tool: CanvasToolMode, label: &'a str| -> Element<'a, DashboardMsg> {
+        let active = state.canvas_state.tool_mode == tool;
+        button(
+            text(label)
+                .size(11.0)
+                .font(ui_font_semi)
+                .color(if active {
+                    p.accent_text
+                } else {
+                    p.text_secondary
+                })
+                .wrapping(Wrapping::None),
+        )
+        .on_press(DashboardMsg::SetCanvasTool(tool))
+        .padding([5, 8])
+        .style(ghost_button_style(mode, active))
+        .into()
+    };
+
+    let mut tool_row = row![
+        tool_btn(CanvasToolMode::SelectPan, "Select/Pan"),
+        tool_btn(CanvasToolMode::MoveEntity, "Move"),
+        tool_btn(CanvasToolMode::MeasureRuler, "Ruler"),
+    ]
+    .spacing(3)
+    .align_y(Alignment::Center);
+
+    if state.canvas_state.measure_line.is_some() {
+        tool_row = tool_row.push(
+            button(ui_icon(UiIcon::Close, 13.0, p.text_secondary))
+                .on_press(DashboardMsg::ClearMeasureRuler)
+                .padding([5, 6])
+                .style(ghost_button_style(mode, false)),
         );
     }
 
     let zoom_controls = row![
         button(ui_icon(UiIcon::ZoomOut, 15.0, p.text_primary))
             .on_press(DashboardMsg::CanvasZoomOut)
-            .padding([5, 8])
+            .padding([5, 7])
             .style(pill_button_style(mode)),
         button(ui_icon(UiIcon::FitScreen, 15.0, p.text_primary))
             .on_press(DashboardMsg::CanvasFitWorld)
-            .padding([5, 8])
+            .padding([5, 7])
             .style(pill_button_style(mode)),
         button(ui_icon(UiIcon::ZoomIn, 15.0, p.text_primary))
             .on_press(DashboardMsg::CanvasZoomIn)
-            .padding([5, 8])
+            .padding([5, 7])
             .style(pill_button_style(mode)),
     ]
     .spacing(4)
     .align_y(Alignment::Center);
 
     let toolbar = container(
-        row![layer_row, Space::new().width(Length::Fill), zoom_controls]
-            .spacing(10)
+        column![
+            row![layer_row, Space::new().width(Length::Fill), zoom_controls]
+                .spacing(8)
+                .align_y(Alignment::Center)
+                .width(Length::Fill),
+            hairline_divider(mode),
+            row![
+                text("Tool:")
+                    .size(11.0)
+                    .font(ui_font_semi)
+                    .color(p.text_muted),
+                tool_row,
+                Space::new().width(Length::Fill),
+                button(
+                    row![
+                        ui_icon(UiIcon::Add, 13.0, p.text_primary),
+                        text("+ Building").size(11.0).font(ui_font_semi),
+                    ]
+                    .spacing(4)
+                    .align_y(Alignment::Center),
+                )
+                .on_press_maybe(if locked {
+                    None
+                } else {
+                    Some(DashboardMsg::AddBlueprintFootprint)
+                })
+                .padding([4, 9])
+                .style(pill_button_style(mode)),
+                button(
+                    row![
+                        ui_icon(UiIcon::Add, 13.0, p.text_primary),
+                        text("+ Door").size(11.0).font(ui_font_semi),
+                    ]
+                    .spacing(4)
+                    .align_y(Alignment::Center),
+                )
+                .on_press_maybe(if locked {
+                    None
+                } else {
+                    Some(DashboardMsg::AddBlueprintDoor)
+                })
+                .padding([4, 9])
+                .style(pill_button_style(mode)),
+            ]
+            .spacing(8)
             .align_y(Alignment::Center)
             .width(Length::Fill),
+        ]
+        .spacing(6),
     )
     .padding([8, 12])
     .width(Length::Fill)
@@ -754,6 +891,7 @@ fn view_blueprint_inspector<'a>(
     ui_font_semi: Font,
     ui_font_bold: Font,
 ) -> Element<'a, DashboardMsg> {
+    let locked = project.is_stage_locked(PipelineStage::Stage3Blueprint);
     let sel_id = state.canvas_state.selected_entity_id.as_deref();
     let mut body = column![
         row![
@@ -767,60 +905,146 @@ fn view_blueprint_inspector<'a>(
         .align_y(Alignment::Center),
         hairline_divider(mode),
     ]
-    .spacing(10)
+    .spacing(9)
     .width(Length::Fill);
 
     if let Some(id) = sel_id {
         if let Some(fp) = project.blueprint.footprints.iter().find(|f| f.id == id) {
             body = body
-                .push(text(&fp.id).size(13).font(Font::MONOSPACE).color(p.accent_text))
-                .push(text(&fp.label).size(13).font(ui_font_bold).color(p.text_primary))
                 .push(
-                    text(format!("Asset ID: {}", fp.asset_id))
-                        .size(11.5)
+                    text(&fp.id)
+                        .size(13)
                         .font(Font::MONOSPACE)
-                        .color(p.text_secondary),
+                        .color(p.accent_text),
                 )
                 .push(
-                    text(format!(
-                        "Pos: ({:.2}m, {:.2}m) · Elev: +{:.2}m · Floors: {}",
-                        fp.rect.x_m, fp.rect.y_m, fp.base_elevation_m, fp.floor_count
-                    ))
-                    .size(11.5)
-                    .font(Font::MONOSPACE)
-                    .color(p.text_secondary),
+                    text(&fp.label)
+                        .size(13)
+                        .font(ui_font_bold)
+                        .color(p.text_primary),
+                )
+                .push(
+                    button(
+                        row![
+                            ui_icon(UiIcon::ViewInAr, 13.0, p.accent_text),
+                            text(format!("Asset: {} ->", fp.asset_id))
+                                .size(11.5)
+                                .font(Font::MONOSPACE)
+                                .color(p.accent_text),
+                        ]
+                        .spacing(5)
+                        .align_y(Alignment::Center),
+                    )
+                    .on_press(DashboardMsg::JumpToAsset(fp.asset_id.clone()))
+                    .padding([4, 8])
+                    .style(ghost_button_style(mode, true)),
                 )
                 .push(hairline_divider(mode))
-                .push(inspector_dim_field(
-                    "Width X (m)",
-                    &state.selected_w_buf,
-                    DashboardMsg::SelectedWidthChanged,
-                    mode,
-                    p,
-                    ui_font_semi,
-                ))
-                .push(inspector_dim_field(
-                    "Depth Y (m)",
-                    &state.selected_d_buf,
-                    DashboardMsg::SelectedDepthChanged,
-                    mode,
-                    p,
-                    ui_font_semi,
-                ))
-                .push(inspector_dim_field(
-                    "Height Z (m)",
-                    &state.selected_h_buf,
-                    DashboardMsg::SelectedHeightChanged,
-                    mode,
-                    p,
-                    ui_font_semi,
-                ))
-                .push(aligned_text(
-                    "Tip: Lower Height Z below 3.24m (e.g. 1.50) to watch the deterministic validator flag SCALE-002 live on the blueprint.",
-                    11.0,
-                    ui_font,
-                    Some(p.text_muted),
-                ));
+                .push(
+                    row![
+                        inspector_dim_field(
+                            "Pos X (m)",
+                            &state.selected_x_buf,
+                            DashboardMsg::SelectedPosXChanged,
+                            mode,
+                            p,
+                            ui_font_semi,
+                        ),
+                        inspector_dim_field(
+                            "Pos Y (m)",
+                            &state.selected_y_buf,
+                            DashboardMsg::SelectedPosYChanged,
+                            mode,
+                            p,
+                            ui_font_semi,
+                        ),
+                    ]
+                    .spacing(8),
+                )
+                .push(
+                    row![
+                        inspector_dim_field(
+                            "Width X (m)",
+                            &state.selected_w_buf,
+                            DashboardMsg::SelectedWidthChanged,
+                            mode,
+                            p,
+                            ui_font_semi,
+                        ),
+                        inspector_dim_field(
+                            "Depth Y (m)",
+                            &state.selected_d_buf,
+                            DashboardMsg::SelectedDepthChanged,
+                            mode,
+                            p,
+                            ui_font_semi,
+                        ),
+                    ]
+                    .spacing(8),
+                )
+                .push(
+                    row![
+                        inspector_dim_field(
+                            "Height Z (m)",
+                            &state.selected_h_buf,
+                            DashboardMsg::SelectedHeightChanged,
+                            mode,
+                            p,
+                            ui_font_semi,
+                        ),
+                        inspector_dim_field(
+                            "Rot (deg)",
+                            &state.selected_rot_buf,
+                            DashboardMsg::SelectedRotChanged,
+                            mode,
+                            p,
+                            ui_font_semi,
+                        ),
+                    ]
+                    .spacing(8),
+                )
+                .push(
+                    row![
+                        inspector_dim_field(
+                            "Elev Z (m)",
+                            &state.selected_elev_buf,
+                            DashboardMsg::SelectedElevChanged,
+                            mode,
+                            p,
+                            ui_font_semi,
+                        ),
+                        inspector_dim_field(
+                            "Floors",
+                            &state.selected_floors_buf,
+                            DashboardMsg::SelectedFloorsChanged,
+                            mode,
+                            p,
+                            ui_font_semi,
+                        ),
+                    ]
+                    .spacing(8),
+                )
+                .push(
+                    button(
+                        row![
+                            ui_icon(UiIcon::Delete, 13.0, p.danger),
+                            text("Delete Selected")
+                                .size(11.5)
+                                .font(ui_font_semi)
+                                .color(p.danger),
+                        ]
+                        .spacing(5)
+                        .align_y(Alignment::Center),
+                    )
+                    .on_press_maybe(if locked {
+                        None
+                    } else {
+                        Some(DashboardMsg::DeleteSelectedEntity)
+                    })
+                    .padding([6, 10])
+                    .width(Length::Fill)
+                    .style(danger_button_style(mode)),
+                );
         } else if let Some(door) = project.blueprint.doors.iter().find(|d| d.id == id) {
             body = body
                 .push(
@@ -841,26 +1065,78 @@ fn view_blueprint_inspector<'a>(
                         .font(Font::MONOSPACE)
                         .color(p.text_secondary),
                 )
-                .push(inspector_dim_field(
-                    "Door Width (m)",
-                    &state.selected_w_buf,
-                    DashboardMsg::SelectedWidthChanged,
-                    mode,
-                    p,
-                    ui_font_semi,
-                ))
-                .push(inspector_dim_field(
-                    "Door Height (m)",
-                    &state.selected_h_buf,
-                    DashboardMsg::SelectedHeightChanged,
-                    mode,
-                    p,
-                    ui_font_semi,
-                ));
+                .push(
+                    row![
+                        inspector_dim_field(
+                            "Door X (m)",
+                            &state.selected_x_buf,
+                            DashboardMsg::SelectedPosXChanged,
+                            mode,
+                            p,
+                            ui_font_semi,
+                        ),
+                        inspector_dim_field(
+                            "Door Y (m)",
+                            &state.selected_y_buf,
+                            DashboardMsg::SelectedPosYChanged,
+                            mode,
+                            p,
+                            ui_font_semi,
+                        ),
+                    ]
+                    .spacing(8),
+                )
+                .push(
+                    row![
+                        inspector_dim_field(
+                            "Width (m)",
+                            &state.selected_w_buf,
+                            DashboardMsg::SelectedWidthChanged,
+                            mode,
+                            p,
+                            ui_font_semi,
+                        ),
+                        inspector_dim_field(
+                            "Height (m)",
+                            &state.selected_h_buf,
+                            DashboardMsg::SelectedHeightChanged,
+                            mode,
+                            p,
+                            ui_font_semi,
+                        ),
+                    ]
+                    .spacing(8),
+                )
+                .push(
+                    button(
+                        row![
+                            ui_icon(UiIcon::Delete, 13.0, p.danger),
+                            text("Delete Door")
+                                .size(11.5)
+                                .font(ui_font_semi)
+                                .color(p.danger),
+                        ]
+                        .spacing(5)
+                        .align_y(Alignment::Center),
+                    )
+                    .on_press_maybe(if locked {
+                        None
+                    } else {
+                        Some(DashboardMsg::DeleteSelectedEntity)
+                    })
+                    .padding([6, 10])
+                    .width(Length::Fill)
+                    .style(danger_button_style(mode)),
+                );
         } else if let Some(marker) = project.blueprint.scale_markers.iter().find(|m| m.id == id) {
             body = body
                 .push(text(&marker.id).size(13).font(Font::MONOSPACE).color(p.success))
-                .push(text(&marker.label).size(13).font(ui_font_bold).color(p.text_primary))
+                .push(
+                    text(&marker.label)
+                        .size(13)
+                        .font(ui_font_bold)
+                        .color(p.text_primary),
+                )
                 .push(
                     text(format!("Position: ({:.2}m, {:.2}m)", marker.x_m, marker.y_m))
                         .size(12)
@@ -900,7 +1176,6 @@ fn view_blueprint_inspector<'a>(
                 );
         }
 
-        // Show entity violations if any
         let entity_violations: Vec<_> = project
             .last_validation
             .violations
@@ -1003,18 +1278,18 @@ fn inspector_dim_field<'a>(
 ) -> Element<'a, DashboardMsg> {
     column![
         text(label)
-            .size(11.5)
+            .size(11.0)
             .font(ui_font_semi)
             .color(p.text_secondary),
         text_input("0.00", val)
             .on_input(on_change)
-            .size(12.5)
-            .padding([6, 10])
+            .size(12.0)
+            .padding([5, 8])
             .font(Font::MONOSPACE)
             .style(sleek_input_style(mode)),
     ]
-    .spacing(4)
-    .width(Length::Fill)
+    .spacing(3)
+    .width(Length::FillPortion(1))
     .into()
 }
 
@@ -1023,6 +1298,7 @@ fn inspector_dim_field<'a>(
 // ============================================================================
 
 pub fn view_assets_tab<'a>(
+    state: &'a DashboardState,
     project: &'a LutetianProject,
     mode: UiThemeMode,
     p: ThemePalette,
@@ -1087,7 +1363,7 @@ pub fn view_assets_tab<'a>(
 
     let header = page_header(
         "Stage 4 & 6 · Deduplicated Asset Catalog & Engine Sync",
-        Some("Each unique modular asset carries locked metric bounding boxes (W × D × H) and an isolated reference slot.".to_string()),
+        Some("Each unique modular asset carries locked metric bounding boxes (W × D × H) and clickable Blueprint links.".to_string()),
         Some(actions),
         p,
         ui_font,
@@ -1111,14 +1387,26 @@ pub fn view_assets_tab<'a>(
     } else {
         for entry in bom {
             let asset = entry.asset;
+            let is_selected = state
+                .selected_asset_id
+                .as_deref()
+                .is_some_and(|s| s == asset.asset_id);
             let thumb: Element<'a, DashboardMsg> = if let Some(path) = &asset.isolated_image_path
                 && let Some(handle) = cached_image_handle(path)
             {
-                image(handle)
-                    .width(Length::Fixed(104.0))
-                    .height(Length::Fixed(80.0))
-                    .content_fit(ContentFit::Contain)
-                    .into()
+                button(
+                    image(handle)
+                        .width(Length::Fixed(104.0))
+                        .height(Length::Fixed(80.0))
+                        .content_fit(ContentFit::Contain),
+                )
+                .on_press(DashboardMsg::OpenLightbox {
+                    title: format!("{} ({})", asset.name, asset.asset_id),
+                    path: path.clone(),
+                })
+                .padding(0)
+                .style(ghost_button_style(mode, false))
+                .into()
             } else {
                 container(
                     column![
@@ -1144,7 +1432,65 @@ pub fn view_assets_tab<'a>(
                 asset.bbox_m.width_m, asset.bbox_m.depth_m, asset.bbox_m.height_m
             );
 
-            let asset_id_for_btn = asset.asset_id.clone();
+            let mut ref_pills = row![].spacing(5).align_y(Alignment::Center);
+            for eid in &entry.entity_ids {
+                ref_pills = ref_pills.push(
+                    button(
+                        text(eid.clone())
+                            .size(11)
+                            .font(Font::MONOSPACE)
+                            .color(p.accent_text),
+                    )
+                    .on_press(DashboardMsg::InspectComplianceEntity(eid.clone()))
+                    .padding([3, 7])
+                    .style(ghost_button_style(mode, false)),
+                );
+            }
+
+            let asset_id_for_attach = asset.asset_id.clone();
+            let asset_id_for_sync = asset.asset_id.clone();
+
+            let has_bbox_mismatch = project
+                .last_validation
+                .violations
+                .iter()
+                .any(|v| v.rule_id == "SCALE-006" && entry.entity_ids.contains(&v.entity_id));
+
+            let mut action_btns = row![
+                button(
+                    row![
+                        ui_icon(UiIcon::PhotoLibrary, 13.0, p.text_primary),
+                        text("Attach Isolated Ref...").size(11.5).font(ui_font_semi),
+                    ]
+                    .spacing(5)
+                    .align_y(Alignment::Center),
+                )
+                .on_press(DashboardMsg::AttachAssetImage(asset_id_for_attach))
+                .padding([5, 10])
+                .style(pill_button_style(mode)),
+            ]
+            .spacing(6)
+            .align_y(Alignment::Center);
+
+            if has_bbox_mismatch {
+                action_btns = action_btns.push(
+                    button(
+                        row![
+                            ui_icon(UiIcon::Refresh, 13.0, p.warning),
+                            text("Sync BBox from Blueprint")
+                                .size(11.5)
+                                .font(ui_font_semi)
+                                .color(p.warning),
+                        ]
+                        .spacing(5)
+                        .align_y(Alignment::Center),
+                    )
+                    .on_press(DashboardMsg::SyncAssetBbox(asset_id_for_sync))
+                    .padding([5, 10])
+                    .style(pill_button_style(mode)),
+                );
+            }
+
             let card_body = row![
                 thumb,
                 column![
@@ -1187,45 +1533,36 @@ pub fn view_assets_tab<'a>(
                     .spacing(8)
                     .align_y(Alignment::Center),
                     text(format!(
-                        "Bounding Box: {bbox_str}   |   Pivot: {}   |   Refs: {}",
-                        asset.pivot,
-                        if entry.entity_ids.is_empty() {
-                            "none".to_string()
-                        } else {
-                            entry.entity_ids.join(", ")
-                        }
+                        "Bounding Box: {bbox_str}   |   Pivot: {}",
+                        asset.pivot
                     ))
                     .size(11.5)
                     .font(Font::MONOSPACE)
                     .color(p.text_secondary),
                     row![
-                        aligned_text(
-                            if asset.notes.is_empty() {
-                                asset
-                                    .isolated_image_path
-                                    .clone()
-                                    .unwrap_or_else(|| "No isolated image attached".to_string())
-                            } else {
-                                asset.notes.clone()
-                            },
-                            12.0,
-                            ui_font,
-                            Some(p.text_secondary),
-                        ),
-                        button(
-                            row![
-                                ui_icon(UiIcon::PhotoLibrary, 13.0, p.text_primary),
-                                text("Attach Isolated Ref...").size(11.5).font(ui_font_semi),
-                            ]
-                            .spacing(5)
-                            .align_y(Alignment::Center),
-                        )
-                        .on_press(DashboardMsg::AttachAssetImage(asset_id_for_btn))
-                        .padding([5, 10])
-                        .style(pill_button_style(mode)),
+                        text("Map Refs:")
+                            .size(11.5)
+                            .font(ui_font_semi)
+                            .color(p.text_muted),
+                        ref_pills,
+                        Space::new().width(Length::Fill),
+                        action_btns,
                     ]
-                    .spacing(10)
+                    .spacing(6)
                     .align_y(Alignment::Center),
+                    aligned_text(
+                        if asset.notes.is_empty() {
+                            asset
+                                .isolated_image_path
+                                .clone()
+                                .unwrap_or_else(|| "No isolated image attached".to_string())
+                        } else {
+                            asset.notes.clone()
+                        },
+                        11.5,
+                        ui_font,
+                        Some(p.text_secondary),
+                    ),
                 ]
                 .spacing(6)
                 .width(Length::Fill),
@@ -1233,12 +1570,23 @@ pub fn view_assets_tab<'a>(
             .spacing(14)
             .align_y(Alignment::Center);
 
-            list = list.push(
-                container(card_body)
-                    .padding(14)
-                    .width(Length::Fill)
-                    .style(card_style(mode, 10.0)),
-            );
+            list = list.push(container(card_body).padding(14).width(Length::Fill).style(
+                move |_| {
+                    let base = card_style(mode, 10.0)(&iced::Theme::Dark);
+                    if is_selected {
+                        iced::widget::container::Style {
+                            border: iced::Border {
+                                color: p.accent,
+                                width: 1.6,
+                                radius: 10.0.into(),
+                            },
+                            ..base
+                        }
+                    } else {
+                        base
+                    }
+                },
+            ));
         }
     }
 

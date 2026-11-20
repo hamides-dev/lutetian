@@ -332,18 +332,35 @@ pub async fn dispatch_rpc(state: &BridgeState, req: RpcRequest) -> RpcResponse {
         }
 
         "get_project_state" => {
-            let proj = state.project.read().await;
-            match serde_json::to_value(&*proj) {
+            let mut proj = state.project.write().await;
+            let was_connected = proj.telemetry.heartbeat.connected;
+            proj.telemetry.heartbeat.connected = true;
+            proj.telemetry.heartbeat.agent_name = "Antigravity Agent (MCP)".to_string();
+            proj.telemetry.heartbeat.active_tool = "get_project_state".to_string();
+            proj.telemetry.heartbeat.last_seen_at = Utc::now().to_rfc3339();
+            let val = serde_json::to_value(&*proj);
+            drop(proj);
+            if !was_connected {
+                state.emit(BridgeEvent::TelemetryUpdated {
+                    action: "Antigravity MCP agent connected".to_string(),
+                });
+            }
+            match val {
                 Ok(v) => RpcResponse::success(v),
                 Err(e) => RpcResponse::failure(e.to_string()),
             }
         }
 
         "get_active_stage_skill" => {
-            let proj = state.project.read().await;
+            let mut proj = state.project.write().await;
+            let was_connected = proj.telemetry.heartbeat.connected;
+            proj.telemetry.heartbeat.connected = true;
+            proj.telemetry.heartbeat.agent_name = "Antigravity Agent (MCP)".to_string();
+            proj.telemetry.heartbeat.active_tool = "get_active_stage_skill".to_string();
+            proj.telemetry.heartbeat.last_seen_at = Utc::now().to_rfc3339();
             let stage = proj.current_stage;
             let gate = proj.stage_status(stage);
-            RpcResponse::success(json!({
+            let res = json!({
                 "current_stage": stage,
                 "stage_number": stage.number(),
                 "stage_title": stage.title(),
@@ -352,7 +369,14 @@ pub async fn dispatch_rpc(state: &BridgeState, req: RpcRequest) -> RpcResponse {
                 "always_required_protocol": "lutetian-live-protocol",
                 "scale_anchors": proj.bible.scale_anchors,
                 "validation_passed": proj.last_validation.passed,
-            }))
+            });
+            drop(proj);
+            if !was_connected {
+                state.emit(BridgeEvent::TelemetryUpdated {
+                    action: "Antigravity MCP agent connected".to_string(),
+                });
+            }
+            RpcResponse::success(res)
         }
 
         "submit_project_bible" => {

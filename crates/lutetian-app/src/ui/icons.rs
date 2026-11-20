@@ -7,8 +7,42 @@ use std::sync::{Mutex, OnceLock};
 
 pub const APP_LOGO_PNG: &[u8] = include_bytes!("../../../../assets/icons/lutetian.png");
 
+// Embedded sample previews for Courtyard Market District demo project
+const SAMPLE_CONCEPT_MAIN: &[u8] =
+    include_bytes!("../../../../assets/samples/courtyard_concept_main.png");
+const SAMPLE_FRONT: &[u8] = include_bytes!("../../../../assets/samples/courtyard_front.png");
+const SAMPLE_BACK: &[u8] = include_bytes!("../../../../assets/samples/courtyard_back.png");
+const SAMPLE_LEFT: &[u8] = include_bytes!("../../../../assets/samples/courtyard_left.png");
+const SAMPLE_RIGHT: &[u8] = include_bytes!("../../../../assets/samples/courtyard_right.png");
+const SAMPLE_BIRD_EYE: &[u8] = include_bytes!("../../../../assets/samples/courtyard_bird_eye.png");
+const SAMPLE_BLDG_HOUSE: &[u8] = include_bytes!("../../../../assets/samples/bldg_timber_house.png");
+const SAMPLE_BLDG_BAKERY: &[u8] = include_bytes!("../../../../assets/samples/bldg_bakery_shop.png");
+const SAMPLE_BLDG_TOWER: &[u8] = include_bytes!("../../../../assets/samples/bldg_watchtower.png");
+const SAMPLE_PROP_FOUNTAIN: &[u8] =
+    include_bytes!("../../../../assets/samples/prop_stone_fountain.png");
+const SAMPLE_TREE_PINE: &[u8] = include_bytes!("../../../../assets/samples/tree_pine_01.png");
+const SAMPLE_BENCH_WOOD: &[u8] = include_bytes!("../../../../assets/samples/bench_wood_01.png");
+
 static APP_LOGO_HANDLE: OnceLock<ImageHandle> = OnceLock::new();
 static IMAGE_FILE_CACHE: OnceLock<Mutex<HashMap<String, Option<ImageHandle>>>> = OnceLock::new();
+
+fn embedded_sample_bytes(key: &str) -> Option<&'static [u8]> {
+    match key.replace('\\', "/").as_str() {
+        "samples/courtyard_concept_main.png" => Some(SAMPLE_CONCEPT_MAIN),
+        "samples/courtyard_front.png" => Some(SAMPLE_FRONT),
+        "samples/courtyard_back.png" => Some(SAMPLE_BACK),
+        "samples/courtyard_left.png" => Some(SAMPLE_LEFT),
+        "samples/courtyard_right.png" => Some(SAMPLE_RIGHT),
+        "samples/courtyard_bird_eye.png" => Some(SAMPLE_BIRD_EYE),
+        "samples/bldg_timber_house.png" => Some(SAMPLE_BLDG_HOUSE),
+        "samples/bldg_bakery_shop.png" => Some(SAMPLE_BLDG_BAKERY),
+        "samples/bldg_watchtower.png" => Some(SAMPLE_BLDG_TOWER),
+        "samples/prop_stone_fountain.png" => Some(SAMPLE_PROP_FOUNTAIN),
+        "samples/tree_pine_01.png" => Some(SAMPLE_TREE_PINE),
+        "samples/bench_wood_01.png" => Some(SAMPLE_BENCH_WOOD),
+        _ => None,
+    }
+}
 
 fn app_logo_handle() -> ImageHandle {
     APP_LOGO_HANDLE
@@ -36,7 +70,7 @@ pub fn app_logo(size: f32) -> Image<ImageHandle> {
         .content_fit(ContentFit::Contain)
 }
 
-/// Loads and caches an external PNG/JPG/WebP image handle if the file exists on disk.
+/// Loads and caches an external PNG/JPG/WebP image handle from disk or embedded sample previews.
 pub fn cached_image_handle(path: &str) -> Option<ImageHandle> {
     let trimmed = path.trim();
     if trimmed.is_empty() {
@@ -51,6 +85,12 @@ pub fn cached_image_handle(path: &str) -> Option<ImageHandle> {
 
     let loaded = if Path::new(trimmed).exists() {
         image::open(trimmed).ok().map(|img| {
+            let rgba = img.to_rgba8();
+            let (w, h) = rgba.dimensions();
+            ImageHandle::from_rgba(w, h, rgba.into_raw())
+        })
+    } else if let Some(bytes) = embedded_sample_bytes(trimmed) {
+        image::load_from_memory(bytes).ok().map(|img| {
             let rgba = img.to_rgba8();
             let (w, h) = rgba.dimensions();
             ImageHandle::from_rgba(w, h, rgba.into_raw())

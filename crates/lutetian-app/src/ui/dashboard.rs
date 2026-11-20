@@ -1,23 +1,23 @@
-use crate::ui::blueprint_canvas::{BlueprintCanvasState, CanvasMsg};
-use crate::ui::icons::{UiIcon, app_logo, ui_icon};
+use crate::ui::blueprint_canvas::{BlueprintCanvasState, CanvasMsg, CanvasToolMode};
+use crate::ui::icons::{UiIcon, app_logo, cached_image_handle, ui_icon};
 use crate::ui::mission_control::view_mission_control;
 use crate::ui::settings_view::view_settings_tab;
 use crate::ui::stage_views::{
     view_assets_tab, view_blueprint_tab, view_multiview_tab, view_stage1_tab,
 };
 use crate::ui::theme::{
-    ThemePalette, aligned_text, badge_style, font_for_ui, ghost_button_style, hairline_divider,
-    nav_button_style, palette_for, pill_button_style, rounded_sidebar_style,
+    ThemePalette, aligned_text, badge_style, card_style, font_for_ui, ghost_button_style,
+    hairline_divider, nav_button_style, palette_for, pill_button_style, rounded_sidebar_style,
     rounded_titlebar_style, square_icon_button, window_close_button_style,
     wrap_frameless_resize_frame,
 };
 use iced::font::Weight;
-use iced::widget::text::{Shaping, Wrapping};
+use iced::widget::text::Wrapping;
 use iced::widget::{
-    Space, button, column, container, mouse_area, progress_bar, row, text, tooltip,
+    Space, Stack, button, column, container, image, mouse_area, progress_bar, row, text, tooltip,
 };
 use iced::window;
-use iced::{Alignment, Background, Border, Color, Element, Font, Length, Padding};
+use iced::{Alignment, Background, Border, Color, ContentFit, Element, Font, Length, Padding};
 use lutetian_core::{
     AngleKind, AppConfig, BlueprintLayer, ComplianceStatus, LutetianProject, PipelineStage,
     UiThemeMode, UpdateCheckResult,
@@ -50,20 +50,32 @@ pub struct DashboardState {
     pub titlebar_close_hovered: bool,
     pub canvas_state: BlueprintCanvasState,
 
+    // Lightbox image preview overlay (title, path)
+    pub lightbox_image: Option<(String, String)>,
+    pub selected_asset_id: Option<String>,
+
     // Editable numeric string buffers synced with active project
     pub anchor_human_buf: String,
     pub anchor_door_h_buf: String,
     pub anchor_door_w_buf: String,
     pub anchor_floor_h_buf: String,
     pub anchor_road_w_buf: String,
+    pub anchor_veh_len_buf: String,
+    pub anchor_veh_wid_buf: String,
 
+    pub selected_x_buf: String,
+    pub selected_y_buf: String,
     pub selected_w_buf: String,
     pub selected_d_buf: String,
     pub selected_h_buf: String,
+    pub selected_rot_buf: String,
+    pub selected_elev_buf: String,
+    pub selected_floors_buf: String,
     pub selected_buf_id: Option<String>,
 
     pub angle_note_bufs: BTreeMap<AngleKind, String>,
     pub bridge_port_buf: String,
+    pub installed_skills_count: usize,
     pub status_toast: Option<String>,
     pub error_banner: Option<String>,
 
@@ -79,7 +91,12 @@ pub struct DashboardState {
 }
 
 impl DashboardState {
-    pub fn new(config: &AppConfig, project: &LutetianProject, bridge_port: u16) -> Self {
+    pub fn new(
+        config: &AppConfig,
+        project: &LutetianProject,
+        bridge_port: u16,
+        installed_skills_count: usize,
+    ) -> Self {
         let mut state = Self {
             active_tab: DashboardTab::Stage3Blueprint,
             settings_subtab: SettingsSubTab::General,
@@ -87,17 +104,27 @@ impl DashboardState {
             sidebar_collapsed: false,
             titlebar_close_hovered: false,
             canvas_state: BlueprintCanvasState::default(),
+            lightbox_image: None,
+            selected_asset_id: None,
             anchor_human_buf: String::new(),
             anchor_door_h_buf: String::new(),
             anchor_door_w_buf: String::new(),
             anchor_floor_h_buf: String::new(),
             anchor_road_w_buf: String::new(),
+            anchor_veh_len_buf: String::new(),
+            anchor_veh_wid_buf: String::new(),
+            selected_x_buf: String::new(),
+            selected_y_buf: String::new(),
             selected_w_buf: String::new(),
             selected_d_buf: String::new(),
             selected_h_buf: String::new(),
+            selected_rot_buf: String::new(),
+            selected_elev_buf: String::new(),
+            selected_floors_buf: String::new(),
             selected_buf_id: None,
             angle_note_bufs: BTreeMap::new(),
             bridge_port_buf: config.bridge_port.to_string(),
+            installed_skills_count,
             status_toast: None,
             error_banner: None,
             bridge_port,
@@ -124,6 +151,8 @@ impl DashboardState {
         self.anchor_door_w_buf = format!("{:.2}", a.door_width_m);
         self.anchor_floor_h_buf = format!("{:.2}", a.floor_height_m);
         self.anchor_road_w_buf = format!("{:.2}", a.road_lane_width_m);
+        self.anchor_veh_len_buf = format!("{:.2}", a.vehicle_length_m);
+        self.anchor_veh_wid_buf = format!("{:.2}", a.vehicle_width_m);
 
         for slot in &project.multi_view.slots {
             self.angle_note_bufs.insert(slot.angle, slot.notes.clone());
@@ -133,27 +162,39 @@ impl DashboardState {
 
     pub fn sync_selected_entity_buffers(&mut self, project: &LutetianProject) {
         let sel = self.canvas_state.selected_entity_id.as_deref();
-        if sel == self.selected_buf_id.as_deref() && sel.is_some() {
-            // Refresh values from project
-        }
         self.selected_buf_id = sel.map(str::to_string);
         if let Some(id) = sel {
             if let Some(fp) = project.blueprint.footprints.iter().find(|f| f.id == id) {
+                self.selected_x_buf = format!("{:.2}", fp.rect.x_m);
+                self.selected_y_buf = format!("{:.2}", fp.rect.y_m);
                 self.selected_w_buf = format!("{:.2}", fp.rect.width_m);
                 self.selected_d_buf = format!("{:.2}", fp.rect.depth_m);
                 self.selected_h_buf = format!("{:.2}", fp.height_m);
+                self.selected_rot_buf = format!("{:.1}", fp.rect.rotation_deg);
+                self.selected_elev_buf = format!("{:.2}", fp.base_elevation_m);
+                self.selected_floors_buf = fp.floor_count.to_string();
                 return;
             }
             if let Some(door) = project.blueprint.doors.iter().find(|d| d.id == id) {
+                self.selected_x_buf = format!("{:.2}", door.position_m.x_m);
+                self.selected_y_buf = format!("{:.2}", door.position_m.y_m);
                 self.selected_w_buf = format!("{:.2}", door.width_m);
                 self.selected_d_buf = format!("{:.2}", door.sill_elevation_m);
                 self.selected_h_buf = format!("{:.2}", door.height_m);
+                self.selected_rot_buf.clear();
+                self.selected_elev_buf = format!("{:.2}", door.sill_elevation_m);
+                self.selected_floors_buf.clear();
                 return;
             }
         }
+        self.selected_x_buf.clear();
+        self.selected_y_buf.clear();
         self.selected_w_buf.clear();
         self.selected_d_buf.clear();
         self.selected_h_buf.clear();
+        self.selected_rot_buf.clear();
+        self.selected_elev_buf.clear();
+        self.selected_floors_buf.clear();
     }
 }
 
@@ -167,10 +208,12 @@ pub enum DashboardMsg {
     TitlebarCloseHovered(bool),
     ResizeWindow(window::Direction),
 
-    // Navigation
+    // Navigation & Lightbox
     SwitchTab(DashboardTab),
     ToggleSidebar,
     SwitchSettingsSubTab(SettingsSubTab),
+    OpenLightbox { title: String, path: String },
+    CloseLightbox,
 
     // Project lifecycle
     NewEmptyProject,
@@ -190,6 +233,8 @@ pub enum DashboardMsg {
     AnchorDoorWidthChanged(String),
     AnchorFloorHeightChanged(String),
     AnchorRoadLaneChanged(String),
+    AnchorVehicleLenChanged(String),
+    AnchorVehicleWidthChanged(String),
     AddReferenceImage,
     RemoveReferenceImage(usize),
     ApproveAndLockStage1,
@@ -203,17 +248,29 @@ pub enum DashboardMsg {
 
     // Stage 3: Blueprint CAD
     Canvas(CanvasMsg),
+    SetCanvasTool(CanvasToolMode),
+    ClearMeasureRuler,
     ToggleBlueprintLayer(BlueprintLayer),
     CanvasZoomIn,
     CanvasZoomOut,
     CanvasFitWorld,
+    SelectedPosXChanged(String),
+    SelectedPosYChanged(String),
     SelectedWidthChanged(String),
     SelectedDepthChanged(String),
     SelectedHeightChanged(String),
+    SelectedRotChanged(String),
+    SelectedElevChanged(String),
+    SelectedFloorsChanged(String),
+    AddBlueprintFootprint,
+    AddBlueprintDoor,
+    DeleteSelectedEntity,
     ApproveAndLockStage3,
 
     // Stage 4 & 6: Assets & Export
     AttachAssetImage(String),
+    JumpToAsset(String),
+    SyncAssetBbox(String),
     ApproveAndLockStage4,
     ExportEngineBundle,
 
@@ -226,6 +283,7 @@ pub enum DashboardMsg {
     BridgePortChanged(String),
     ApplyBridgePort,
     CopyMcpConfigJson,
+    InstallAntigravityPlugin,
     OpenPluginFolder,
     ToggleAutoCheckUpdates(bool),
     ToggleIncludePrereleases(bool),
@@ -260,7 +318,7 @@ pub fn view_dashboard<'a>(
             view_blueprint_tab(state, project, mode, p, ui_font, ui_font_semi, ui_font_bold)
         }
         DashboardTab::Stage4Assets => {
-            view_assets_tab(project, mode, p, ui_font, ui_font_semi, ui_font_bold)
+            view_assets_tab(state, project, mode, p, ui_font, ui_font_semi, ui_font_bold)
         }
         DashboardTab::MissionControl => view_mission_control(
             project,
@@ -303,13 +361,110 @@ pub fn view_dashboard<'a>(
         .width(Length::Fill)
         .height(Length::Fill);
 
-    wrap_frameless_resize_frame(
+    let base_shell = wrap_frameless_resize_frame(
         shell.into(),
         mode,
         12.0,
         state.is_maximized,
         DashboardMsg::ResizeWindow,
+    );
+
+    if let Some((title, path)) = &state.lightbox_image {
+        let modal =
+            view_lightbox_overlay(title, path, mode, p, ui_font, ui_font_semi, ui_font_bold);
+        Stack::with_children(vec![base_shell, modal])
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into()
+    } else {
+        base_shell
+    }
+}
+
+fn view_lightbox_overlay<'a>(
+    title: &'a str,
+    path: &'a str,
+    mode: UiThemeMode,
+    p: ThemePalette,
+    ui_font: Font,
+    ui_font_semi: Font,
+    ui_font_bold: Font,
+) -> Element<'a, DashboardMsg> {
+    let img_body: Element<'a, DashboardMsg> = if let Some(handle) = cached_image_handle(path) {
+        image(handle)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .content_fit(ContentFit::Contain)
+            .into()
+    } else {
+        container(
+            text(format!("Image file not found on disk: {path}"))
+                .size(13)
+                .font(Font::MONOSPACE)
+                .color(p.text_secondary),
+        )
+        .center_x(Length::Fill)
+        .center_y(Length::Fill)
+        .into()
+    };
+
+    let card = container(
+        column![
+            row![
+                ui_icon(UiIcon::PhotoLibrary, 16.0, p.accent_text),
+                text(title)
+                    .size(14.5)
+                    .font(ui_font_bold)
+                    .color(p.text_primary),
+                Space::new().width(Length::Fill),
+                text(path)
+                    .size(11.5)
+                    .font(Font::MONOSPACE)
+                    .color(p.text_secondary),
+                button(
+                    row![
+                        ui_icon(UiIcon::Close, 14.0, p.text_primary),
+                        text("Close").size(12).font(ui_font_semi),
+                    ]
+                    .spacing(5)
+                    .align_y(Alignment::Center),
+                )
+                .on_press(DashboardMsg::CloseLightbox)
+                .padding([6, 11])
+                .style(pill_button_style(mode)),
+            ]
+            .spacing(10)
+            .align_y(Alignment::Center),
+            hairline_divider(mode),
+            container(img_body)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .padding(8),
+            text("Press Esc or Close to return")
+                .size(11)
+                .font(ui_font)
+                .color(p.text_muted),
+        ]
+        .spacing(10),
     )
+    .padding(18)
+    .width(Length::Fixed(760.0))
+    .height(Length::Fixed(520.0))
+    .style(card_style(mode, 12.0));
+
+    mouse_area(
+        container(card)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .center_x(Length::Fill)
+            .center_y(Length::Fill)
+            .style(move |_| container::Style {
+                background: Some(Background::Color(Color::from_rgba(0.03, 0.02, 0.05, 0.78))),
+                ..Default::default()
+            }),
+    )
+    .on_press(DashboardMsg::CloseLightbox)
+    .into()
 }
 
 fn view_custom_titlebar<'a>(
@@ -337,8 +492,7 @@ fn view_custom_titlebar<'a>(
             .size(11)
             .font(ui_font_semi)
             .color(if connected { p.success } else { p.accent_text })
-            .wrapping(Wrapping::None)
-            .shaping(Shaping::Advanced),
+            .wrapping(Wrapping::None),
         ]
         .spacing(5)
         .align_y(Alignment::Center),
@@ -360,15 +514,13 @@ fn view_custom_titlebar<'a>(
             text("Lutetian")
                 .size(13)
                 .font(ui_font_bold)
-                .color(p.text_primary)
-                .shaping(Shaping::Advanced),
+                .color(p.text_primary),
             text("·").size(12).color(p.text_muted),
             text(&project.name)
                 .size(12)
                 .font(ui_font)
                 .color(p.text_secondary)
-                .wrapping(Wrapping::None)
-                .shaping(Shaping::Advanced),
+                .wrapping(Wrapping::None),
             bridge_badge,
             Space::new().width(Length::Fill),
         ]
@@ -424,8 +576,7 @@ fn view_custom_titlebar<'a>(
         text("Toggle Sidebar")
             .size(12)
             .font(ui_font)
-            .color(p.text_primary)
-            .shaping(Shaping::Advanced),
+            .color(p.text_primary),
         tooltip::Position::Bottom,
     )
     .gap(6)
@@ -692,11 +843,7 @@ fn sidebar_nav_button<'a>(
     if collapsed {
         tooltip(
             btn,
-            text(label)
-                .size(12)
-                .font(ui_font)
-                .color(p.text_primary)
-                .shaping(Shaping::Advanced),
+            text(label).size(12).font(ui_font).color(p.text_primary),
             tooltip::Position::Right,
         )
         .gap(8)

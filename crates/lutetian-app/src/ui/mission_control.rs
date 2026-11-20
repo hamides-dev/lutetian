@@ -2,7 +2,7 @@ use crate::ui::dashboard::{DashboardMsg, page_header};
 use crate::ui::icons::{UiIcon, ui_icon};
 use crate::ui::theme::{
     ThemePalette, aligned_text, badge_style, card_style, elevated_box_style, hairline_divider,
-    pill_button_style, primary_button_style, sleek_scrollable,
+    pill_button_style, primary_button_style, selectable_card_style, sleek_scrollable,
 };
 use iced::widget::{Space, button, column, container, progress_bar, row, text};
 use iced::{Alignment, Element, Font, Length};
@@ -65,9 +65,9 @@ pub fn view_mission_control<'a>(
                     .color(p.text_primary),
                 container(
                     text(if hb.connected {
-                        format!("LIVE MCP · :{}", bridge_port)
+                        format!("LIVE MCP · :{bridge_port}")
                     } else {
-                        format!("LISTENING :{}", bridge_port)
+                        format!("LISTENING :{bridge_port}")
                     })
                     .size(11)
                     .font(ui_font_semi)
@@ -187,11 +187,11 @@ pub fn view_mission_control<'a>(
     .spacing(12)
     .width(Length::Fill);
 
-    // 3. Compliance & Rules Matrix
+    // 3. Compliance & Rules Matrix (clickable rows highlight offending object on Blueprint or Asset list)
     let mut matrix_col = column![
         row![
             ui_icon(UiIcon::VerifiedUser, 16.0, p.accent_text),
-            text("Compliance & Rules Matrix")
+            text("Compliance & Rules Matrix (click flagged rules to inspect entity)")
                 .size(14)
                 .font(ui_font_bold)
                 .color(p.text_primary),
@@ -221,6 +221,15 @@ pub fn view_mission_control<'a>(
             ComplianceStatus::Pending => (p.warning_soft, p.warning),
             ComplianceStatus::Violated => (p.danger_soft, p.danger),
         };
+
+        let target_msg = rule.entity_id.as_ref().map(|eid| {
+            if project.assets.iter().any(|a| a.asset_id == *eid) || rule.rule_id == "GATE-004" {
+                DashboardMsg::JumpToAsset(eid.clone())
+            } else {
+                DashboardMsg::InspectComplianceEntity(eid.clone())
+            }
+        });
+
         let mut row_items: Vec<Element<'a, DashboardMsg>> = vec![
             container(
                 text(rule.status.badge_text())
@@ -265,7 +274,7 @@ pub fn view_mission_control<'a>(
             .into(),
         ];
 
-        if let Some(eid) = &rule.entity_id {
+        if let (Some(eid), Some(msg)) = (&rule.entity_id, target_msg.clone()) {
             row_items.push(
                 button(
                     row![
@@ -275,24 +284,29 @@ pub fn view_mission_control<'a>(
                     .spacing(5)
                     .align_y(Alignment::Center),
                 )
-                .on_press(DashboardMsg::InspectComplianceEntity(eid.clone()))
+                .on_press(msg)
                 .padding([5, 10])
                 .style(pill_button_style(mode))
                 .into(),
             );
         }
 
-        matrix_col = matrix_col.push(
-            container(
-                row(row_items)
-                    .spacing(12)
-                    .align_y(Alignment::Center)
-                    .width(Length::Fill),
-            )
-            .padding([9, 12])
-            .width(Length::Fill)
-            .style(elevated_box_style(mode, 8.0)),
-        );
+        let row_widget = button(
+            row(row_items)
+                .spacing(12)
+                .align_y(Alignment::Center)
+                .width(Length::Fill),
+        )
+        .on_press_maybe(target_msg)
+        .padding([9, 12])
+        .width(Length::Fill)
+        .style(selectable_card_style(
+            mode,
+            rule.status == ComplianceStatus::Violated,
+            8.0,
+        ));
+
+        matrix_col = matrix_col.push(row_widget);
     }
 
     let matrix_card = container(matrix_col)

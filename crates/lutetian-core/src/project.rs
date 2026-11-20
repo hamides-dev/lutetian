@@ -647,6 +647,101 @@ impl LutetianProject {
         Ok(())
     }
 
+    pub fn add_footprint_interactive(&mut self) -> String {
+        let idx = self.blueprint.footprints.len() + 1;
+        let id = format!("NEW_BLDG_{idx:02}");
+        self.blueprint.footprints.push(FootprintEntity {
+            id: id.clone(),
+            asset_id: "BLDG_TIMBER_HOUSE".to_string(),
+            label: format!("Modular Structure {idx}"),
+            kind: FootprintKind::Building,
+            rect: MetricRect2D::new(8.0, 14.0, 6.0, 5.0),
+            height_m: 6.4,
+            base_elevation_m: 0.15,
+            floor_count: 2,
+            collidable: true,
+        });
+        self.updated_at = Utc::now().to_rfc3339();
+        self.recompute_validation();
+        id
+    }
+
+    pub fn add_door_interactive(&mut self, parent_entity_id: Option<&str>) -> String {
+        let idx = self.blueprint.doors.len() + 1;
+        let id = format!("NEW_DOOR_{idx:02}");
+        let (parent, pos, sill) = if let Some(pid) = parent_entity_id
+            && let Some(fp) = self.blueprint.footprints.iter().find(|f| f.id == pid)
+        {
+            (
+                fp.id.clone(),
+                MetricPoint2D {
+                    x_m: fp.rect.x_m + fp.rect.width_m * 0.5,
+                    y_m: fp.rect.y_m + fp.rect.depth_m,
+                },
+                fp.base_elevation_m,
+            )
+        } else {
+            (
+                "WORLD".to_string(),
+                MetricPoint2D {
+                    x_m: 12.0,
+                    y_m: 12.0,
+                },
+                0.0,
+            )
+        };
+        self.blueprint.doors.push(DoorOpening {
+            id: id.clone(),
+            parent_entity_id: parent,
+            label: format!("Doorway {idx}"),
+            position_m: pos,
+            width_m: self.bible.scale_anchors.door_width_m,
+            height_m: self.bible.scale_anchors.door_height_m,
+            sill_elevation_m: sill,
+        });
+        self.updated_at = Utc::now().to_rfc3339();
+        self.recompute_validation();
+        id
+    }
+
+    pub fn delete_entity(&mut self, entity_id: &str) -> bool {
+        let fp_before = self.blueprint.footprints.len();
+        self.blueprint.footprints.retain(|f| f.id != entity_id);
+        let door_before = self.blueprint.doors.len();
+        self.blueprint
+            .doors
+            .retain(|d| d.id != entity_id && d.parent_entity_id != entity_id);
+        let zone_before = self.blueprint.zones.len();
+        self.blueprint.zones.retain(|z| z.id != entity_id);
+        let changed = self.blueprint.footprints.len() != fp_before
+            || self.blueprint.doors.len() != door_before
+            || self.blueprint.zones.len() != zone_before;
+        if changed {
+            self.updated_at = Utc::now().to_rfc3339();
+            self.recompute_validation();
+        }
+        changed
+    }
+
+    pub fn sync_asset_bbox_from_footprint(&mut self, asset_id: &str) -> bool {
+        let Some(fp) = self
+            .blueprint
+            .footprints
+            .iter()
+            .find(|f| f.asset_id == asset_id)
+            .cloned()
+        else {
+            return false;
+        };
+        if let Some(asset) = self.assets.iter_mut().find(|a| a.asset_id == asset_id) {
+            asset.bbox_m = MetricDimensions::new(fp.rect.width_m, fp.rect.depth_m, fp.height_m);
+            self.updated_at = Utc::now().to_rfc3339();
+            self.recompute_validation();
+            return true;
+        }
+        false
+    }
+
     /// Creates a rich, 100% scale-compliant reference demonstration project
     /// ("Lutetian Courtyard Plaza") so the CAD Blueprint viewer, Multi-View gallery,
     /// Asset Catalog BOM, and Live Mission Control are immediately verifiable on first launch.
@@ -658,7 +753,7 @@ impl LutetianProject {
             mood: "Warm late-afternoon golden sun with crisp architectural shadows".to_string(),
             lighting: "Directional key 38° elevation, warm fill bounce off cobblestone plaza".to_string(),
             palette_notes: "Limestone ashlar #D6CFC2, weathered oak #5C4332, slate roof #3A3D4A, moss foliage #4F6F46".to_string(),
-            reference_images: vec!["references/courtyard_concept_main.png".to_string()],
+            reference_images: vec!["samples/courtyard_concept_main.png".to_string()],
             scale_anchors: ScaleAnchors::default(),
             locked: true,
             updated_at: Utc::now().to_rfc3339(),
@@ -674,7 +769,7 @@ impl LutetianProject {
                 .iter()
                 .map(|&angle| MultiViewSlot {
                     angle,
-                    image_path: Some(format!("multiview/courtyard_{}.png", angle.key())),
+                    image_path: Some(format!("samples/courtyard_{}.png", angle.key())),
                     notes: format!("Verified {} proportion & silhouette match.", angle.label()),
                     status: AngleApprovalStatus::Approved,
                     revision: 1,
@@ -952,7 +1047,7 @@ impl LutetianProject {
                 category: AssetCategory::Architecture,
                 bbox_m: MetricDimensions::new(11.0, 7.5, 7.4),
                 pivot: "bottom_sw".to_string(),
-                isolated_image_path: Some("assets/isolated/bldg_timber_house.png".to_string()),
+                isolated_image_path: Some("samples/bldg_timber_house.png".to_string()),
                 material_tags: vec!["limestone".into(), "oak_timber".into(), "slate_tile".into()],
                 notes: "Modular 2-story timber-framed tavern with recessed stone doorway."
                     .to_string(),
@@ -963,7 +1058,7 @@ impl LutetianProject {
                 category: AssetCategory::Architecture,
                 bbox_m: MetricDimensions::new(9.5, 7.0, 6.8),
                 pivot: "bottom_sw".to_string(),
-                isolated_image_path: Some("assets/isolated/bldg_bakery_shop.png".to_string()),
+                isolated_image_path: Some("samples/bldg_bakery_shop.png".to_string()),
                 material_tags: vec!["plaster_warm".into(), "terracotta".into()],
                 notes: "2-story corner storefront with awning overhang.".to_string(),
             },
@@ -973,7 +1068,7 @@ impl LutetianProject {
                 category: AssetCategory::Architecture,
                 bbox_m: MetricDimensions::new(6.0, 6.0, 12.2),
                 pivot: "bottom_sw".to_string(),
-                isolated_image_path: Some("assets/isolated/bldg_watchtower.png".to_string()),
+                isolated_image_path: Some("samples/bldg_watchtower.png".to_string()),
                 material_tags: vec!["ashlar_stone".into(), "iron_grate".into()],
                 notes: "3-tier vertical landmark anchor on east plaza approach.".to_string(),
             },
@@ -983,7 +1078,7 @@ impl LutetianProject {
                 category: AssetCategory::StreetFurniture,
                 bbox_m: MetricDimensions::new(4.0, 4.0, 2.3),
                 pivot: "bottom_center".to_string(),
-                isolated_image_path: Some("assets/isolated/prop_stone_fountain.png".to_string()),
+                isolated_image_path: Some("samples/prop_stone_fountain.png".to_string()),
                 material_tags: vec!["carved_limestone".into(), "water".into()],
                 notes: "Central plaza focal prop.".to_string(),
             },
@@ -993,7 +1088,7 @@ impl LutetianProject {
                 category: AssetCategory::Foliage,
                 bbox_m: MetricDimensions::new(2.6, 2.6, 6.5),
                 pivot: "bottom_center".to_string(),
-                isolated_image_path: Some("assets/isolated/tree_pine_01.png".to_string()),
+                isolated_image_path: Some("samples/tree_pine_01.png".to_string()),
                 material_tags: vec!["pine_bark".into(), "needles_alpha".into()],
                 notes: "Deduplicated hero tree instanced across courtyard perimeter.".to_string(),
             },
@@ -1003,7 +1098,7 @@ impl LutetianProject {
                 category: AssetCategory::StreetFurniture,
                 bbox_m: MetricDimensions::new(2.2, 0.8, 0.9),
                 pivot: "bottom_center".to_string(),
-                isolated_image_path: Some("assets/isolated/bench_wood_01.png".to_string()),
+                isolated_image_path: Some("samples/bench_wood_01.png".to_string()),
                 material_tags: vec!["weathered_oak".into(), "wrought_iron".into()],
                 notes: "Seat height 0.45m calibrated to 1.8m human scale.".to_string(),
             },
@@ -1171,5 +1266,26 @@ mod tests {
         }
         assert!(proj.is_stage_locked(PipelineStage::Stage2MultiView));
         assert_eq!(proj.current_stage, PipelineStage::Stage3Blueprint);
+    }
+
+    #[test]
+    fn full_stage_progression_and_engine_bundle_export() {
+        let mut proj = LutetianProject::create_demo_project();
+        assert_eq!(proj.current_stage, PipelineStage::Stage6EngineSync);
+
+        // User adds & deletes footprint interactively
+        let added = proj.add_footprint_interactive();
+        assert!(proj.blueprint.footprints.iter().any(|f| f.id == added));
+        assert!(proj.delete_entity(&added));
+        assert!(!proj.blueprint.footprints.iter().any(|f| f.id == added));
+
+        // Verify Stage 6 Engine Sync bundle writes all 3 files
+        let out_dir =
+            std::env::temp_dir().join(format!("lutetian_export_{}", uuid::Uuid::new_v4()));
+        let manifest_path = crate::export_engine_bundle(&proj, &out_dir).expect("export");
+        assert!(manifest_path.exists());
+        assert!(out_dir.join("master_blueprint.json").exists());
+        assert!(out_dir.join("asset_catalog_bom.json").exists());
+        let _ = std::fs::remove_dir_all(&out_dir);
     }
 }

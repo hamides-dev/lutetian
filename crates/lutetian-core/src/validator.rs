@@ -832,4 +832,61 @@ mod tests {
                 .any(|v| v.rule_id == "SCALE-006" && v.entity_id == "HOUSE_A_01")
         );
     }
+
+    #[test]
+    fn rejects_insufficient_height_for_multi_floor_building() {
+        let mut project = LutetianProject::create_demo_project();
+        if let Some(house) = project
+            .blueprint
+            .footprints
+            .iter_mut()
+            .find(|f| f.id == "HOUSE_A_01")
+        {
+            house.floor_count = 3; // Needs >= 3 * 3.2 * 0.85 = 8.16m
+            house.height_m = 6.5;
+        }
+        let report = validate_project(&project);
+        assert!(!report.passed);
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.rule_id == "SCALE-003" && v.entity_id == "HOUSE_A_01")
+        );
+    }
+
+    #[test]
+    fn detects_out_of_bounds_and_narrow_road_lane() {
+        let mut project = LutetianProject::create_demo_project();
+        if let Some(house) = project
+            .blueprint
+            .footprints
+            .iter_mut()
+            .find(|f| f.id == "TOWER_GATE_01")
+        {
+            house.rect.x_m = 41.0; // 41 + 6 > 44m world width
+        }
+        if let Some(road) = project
+            .blueprint
+            .navigation_paths
+            .iter_mut()
+            .find(|n| n.is_vehicular)
+        {
+            road.width_m = 2.4; // Narrower than 3.5m road_lane_width_m
+        }
+        let report = validate_project(&project);
+        assert!(!report.passed);
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.rule_id == "SCALE-007" && v.entity_id == "TOWER_GATE_01")
+        );
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v.rule_id == "SCALE-008" && v.entity_id == "NAV_CARRIAGE_LANE")
+        );
+    }
 }
