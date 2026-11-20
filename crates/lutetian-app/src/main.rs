@@ -100,6 +100,7 @@ struct LutetianApp {
     bridge_state: Option<BridgeState>,
     _bridge_runtime_guard: Arc<Mutex<Option<RunningBridge>>>,
 
+    #[cfg(target_os = "windows")]
     app_icon: Option<window::Icon>,
     dashboard_id: Option<window::Id>,
     window_size: Size,
@@ -213,7 +214,10 @@ impl LutetianApp {
 
         let app_icon =
             load_app_icon_rgba().and_then(|(rgba, w, h)| window::icon::from_rgba(rgba, w, h).ok());
+        #[cfg(target_os = "windows")]
         let (dash_id, open_task) = open_dashboard_task(app_icon.clone());
+        #[cfg(not(target_os = "windows"))]
+        let (dash_id, open_task) = open_dashboard_task(app_icon);
         let installed_skills_count = count_installed_lutetian_skills();
         let dashboard = DashboardState::new(
             &config,
@@ -231,6 +235,7 @@ impl LutetianApp {
             shared_project,
             bridge_state: None,
             _bridge_runtime_guard: bridge_guard,
+            #[cfg(target_os = "windows")]
             app_icon,
             dashboard_id: Some(dash_id),
             window_size: Size::new(1180.0, 760.0),
