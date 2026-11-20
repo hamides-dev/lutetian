@@ -1,0 +1,26 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/lutetian-core",
+    "crates/lutetian-bridge",
+    "crates/lutetian-mcp",
+    "crates/lutetian-app",
+]
+
+[workspace.package]
+version = "0.1.0" # x-release-please-version
+edition = "2024"
+authors = ["Hamid Eslami <hamideslami540@gmail.com>"]
+license = "MIT"
+repository = "https://github.com/hamides-dev/lutetian"
+description = "Ultra-lightweight pure-Rust Game Environment Architecture Studio, deterministic scale validator, and live AI agent mission control."
+
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.release]
+opt-level = "s"
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+panic = "abort"

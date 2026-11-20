@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "lutetian": {
+      "command": "lutetian-mcp",
+      "args": []
+    }
+  }
+}

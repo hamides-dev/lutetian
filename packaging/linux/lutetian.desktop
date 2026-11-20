@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=Lutetian Studio
+Comment=Lightweight pure-Rust Game Environment Architecture Studio & Scale Validator
+Exec=lutetian
+Icon=lutetian
+Terminal=false
+Type=Application
+Categories=Development;Graphics;3DGraphics;
+StartupNotify=false

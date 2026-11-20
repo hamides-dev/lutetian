@@ -1,0 +1,13 @@
+/target/
+/dist/
+**/*.rs.bk
+*.pdb
+*.exe
+*.msi
+*.dmg
+*.AppImage
+.DS_Store
+Thumbs.db
+.env
+*.local.json
+antigravity-plugin/mcp_config.resolved.json
